@@ -1,0 +1,4 @@
+---
+# Staging-specific inventories (additive to config/all/)
+controller_inventories_staging: []
+...

@@ -1,0 +1,53 @@
+---
+# WARNING: This playbook uses ansible.platform.role_team_assignment which CANNOT
+# perform cross-org assignments. On aap-operator.v2.7.0-0.1785438991, the module
+# sends the resource name as object_id (expects integer), causing a 500 error.
+# FOR CROSS-ORG SHARING, USE apply_sharing_api.yml INSTEAD.
+#
+# This playbook is only suitable for same-org role assignments.
+
+- name: Apply cross-org resource sharing (module-based)
+  hosts: all
+  connection: local
+  vars_files:
+    - ../config/{{ env }}/secrets.yml
+  vars:
+    sharing_def_dir: "../sharing_definitions"
+  module_defaults:
+    group/ansible.platform.gateway:
+      aap_hostname: "{{ aap_hostname }}"
+      aap_username: "{{ aap_username }}"
+      aap_password: "{{ aap_password }}"
+      aap_validate_certs: "{{ aap_validate_certs }}"
+  tasks:
+    - name: Find all sharing definition files
+      ansible.builtin.find:
+        paths: "{{ sharing_def_dir }}"
+        patterns: "*.yml"
+        excludes: "*.sample"
+      register: sharing_files
+      delegate_to: localhost
+
+    - name: Load sharing definitions
+      ansible.builtin.include_vars:
+        file: "{{ item.path }}"
+        name: "sharing_{{ item.path | basename | regex_replace('.yml$', '') | regex_replace('-', '_') }}"
+      loop: "{{ sharing_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+    - name: Build sharing list from loaded definitions
+      ansible.builtin.set_fact:
+        sharing_definitions: >-
+          {{
+            sharing_files.files | map(attribute='path') | map('basename') |
+            map('regex_replace', '.yml$', '') | map('regex_replace', '-', '_') |
+            map('regex_replace', '^', 'sharing_') | list
+          }}
+
+    - name: Apply each sharing definition
+      ansible.builtin.include_tasks: _apply_sharing_module_tasks.yml
+      loop: "{{ sharing_definitions }}"
+      loop_control:
+        loop_var: sharing_var_name
+...

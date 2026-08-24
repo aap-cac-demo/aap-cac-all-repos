@@ -1,0 +1,13 @@
+---
+all:
+  children:
+    dev:
+      hosts:
+        localhost:
+  vars:
+    env: dev
+    aap_hostname: "aap-gateway.dev.example.com"
+    aap_username: "{{ aap_user | default('admin') }}"
+    aap_password: "{{ aap_pass }}"
+    aap_validate_certs: false
+...

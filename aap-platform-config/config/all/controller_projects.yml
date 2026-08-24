@@ -1,0 +1,25 @@
+---
+controller_projects_all:
+  - name: "aap-platform-config"
+    description: "Platform Configuration as Code"
+    organization: Platform
+    scm_type: git
+    scm_url: "{{ platform_cac_repo_url }}"
+    scm_branch: main
+    credential: scm-github
+    scm_update_on_launch: true
+    update_project: true
+    state: present
+
+  # Team CaC projects are created by team_onboarding.yml from team_definitions/*.yml.
+  # Example:
+  # - name: "team-alpha-cac"
+  #   description: "Configuration as Code for Team Alpha"
+  #   organization: "Team-Alpha"
+  #   scm_type: git
+  #   scm_url: "https://github.com/<company>-aap/aap-team-alpha-config.git"
+  #   scm_branch: main
+  #   credential: scm-github
+  #   scm_update_on_launch: true
+  #   state: present
+...

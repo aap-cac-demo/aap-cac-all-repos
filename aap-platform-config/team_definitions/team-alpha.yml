@@ -1,0 +1,35 @@
+---
+# Team definition for Team Alpha
+# This file drives the team_onboarding.yml playbook.
+# One file per team under team_definitions/.
+
+team_name: "team-alpha"
+org_display_name: "Team-Alpha"
+description: "Alpha team automation resources"
+
+ldap_groups:
+  admins: "cn=aap-team-alpha-admins,ou=groups,dc=example,dc=com"
+  operators: "cn=aap-team-alpha-operators,ou=groups,dc=example,dc=com"
+
+# Optional: sub-teams with LDAP mapping and an org-level role.
+# Authenticator maps for these are created by the platform onboarding playbook.
+# If omitted, the team gets only the default admin (via authenticator map) + operators tiers.
+# org_role (optional): an org-level role assigned at onboarding (e.g., Organization Execute,
+#   Organization Auditor). Only org-level roles are supported here because the organization
+#   is the only resource guaranteed to exist at onboarding time.
+# Resource-scoped role assignments (e.g., Project Admin on a specific project, Job Template
+#   Execute on a specific JT) go in the team CaC repo: config/all/gateway_role_team_assignments.yml
+custom_teams:
+  - name: "team-alpha-developers"
+    ldap_group: "cn=aap-team-alpha-devs,ou=groups,dc=example,dc=com"
+    org_role: "Organization Execute"
+
+instance_group: "default"
+
+cac_repo_url: "https://forgejo.smalick.com/aap-cac-demo/aap-team-alpha-config.git"
+
+environments:
+  - dev
+  - staging
+  - prod
+...

@@ -1,0 +1,12 @@
+---
+# Hub namespaces managed by the platform team.
+#
+# hub_custom_collection_namespace is defined in config/{env}/_commons.yml.
+# All custom collections in the aap-hub-collections repo use this namespace
+# in their galaxy.yml. Creating the namespace here ensures it exists in Hub
+# before any collection is uploaded.
+hub_namespace_all:
+  - name: "{{ hub_custom_collection_namespace }}"
+    description: "Organization-wide custom collections"
+    state: present
+...

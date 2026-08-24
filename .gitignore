@@ -1,0 +1,10 @@
+*.retry
+*.pyc
+__pycache__/
+.venv/
+venv/
+collections/ansible_collections/
+.vault_pass.txt
+.vault-pass
+aap-platform-config/collections/ansible_collections
+secrets_tokens_env.sh

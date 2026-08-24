@@ -1,0 +1,29 @@
+---
+- name: Apply platform and Hub configuration
+  hosts: all
+  connection: local
+  tasks:
+    - name: Include common vars
+      ansible.builtin.include_vars:
+        dir: ../config/all
+        extensions:
+          - 'yml'
+
+    - name: Include env vars
+      ansible.builtin.include_vars:
+        dir: "../config/{{ env }}"
+        extensions:
+          - 'yml'
+
+    - name: Set up Hub Galaxy credential
+      ansible.builtin.include_tasks: _hub_galaxy_credential_tasks.yml
+
+    - name: Apply configuration via dispatch
+      ansible.builtin.include_role:
+        name: infra.aap_configuration.dispatch
+      vars:
+        dispatch_include_wildcard_vars: true
+
+    - name: Set up Hub remotes and sync collections
+      ansible.builtin.include_tasks: _hub_sync_tasks.yml
+...

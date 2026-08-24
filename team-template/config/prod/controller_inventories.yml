@@ -1,0 +1,4 @@
+---
+# Prod-specific inventories (additive to config/all/)
+controller_inventories_prod: []
+...

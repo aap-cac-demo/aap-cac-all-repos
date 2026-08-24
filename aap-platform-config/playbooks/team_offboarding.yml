@@ -1,0 +1,112 @@
+---
+- name: Offboard a team from AAP
+  hosts: all
+  connection: local
+  vars_files:
+    - ../config/{{ env }}/secrets.yml
+  vars:
+    team_name: ""
+  module_defaults:
+    group/ansible.platform.gateway:
+      aap_hostname: "{{ aap_hostname }}"
+      aap_username: "{{ aap_username }}"
+      aap_password: "{{ aap_password }}"
+      aap_validate_certs: "{{ aap_validate_certs }}"
+  tasks:
+    - name: Include env secrets
+      ansible.builtin.include_vars:
+        dir: "../config/{{ env }}"
+        extensions:
+          - 'yml'
+
+    - name: Validate team_name is provided
+      ansible.builtin.assert:
+        that:
+          - team_name | length > 0
+        fail_msg: "team_name must be provided as extra var (e.g., -e team_name=team-bravo)"
+
+    - name: "Load team definition: team_definitions/{{ team_name }}.yml"
+      ansible.builtin.include_vars:
+        file: "../team_definitions/{{ team_name }}.yml"
+        name: _offboard_team
+
+    - name: Validate team definition fields
+      ansible.builtin.assert:
+        that:
+          - _offboard_team.team_name is defined
+          - _offboard_team.org_display_name is defined
+        fail_msg: "Team definition missing required fields (team_name, org_display_name)"
+
+    # --- Check for stale sharing definitions ---
+
+    - name: "Check for sharing definitions referencing {{ _offboard_team.team_name }}"
+      ansible.builtin.find:
+        paths: "{{ playbook_dir }}/../sharing_definitions"
+        patterns: "*{{ _offboard_team.team_name }}*"
+        file_type: file
+      register: _stale_sharing_files
+
+    - name: "WARNING: Stale sharing definitions found"
+      ansible.builtin.debug:
+        msg: >-
+          The following sharing definitions reference the offboarded team and should be
+          removed via PR: {{ _stale_sharing_files.files | map(attribute='path') | map('basename') | list | join(', ') }}
+      when: _stale_sharing_files.matched > 0
+
+    # --- Remove custom sub-team authenticator maps (global, not cascade-deleted) ---
+
+    - name: "Remove custom sub-team authenticator maps"
+      ansible.platform.authenticator_map:
+        name: "{{ item.name }}-map"
+        authenticator: corporate-ldap
+        map_type: team
+        state: absent
+      loop: "{{ (_offboard_team.custom_teams | default([])) }}"
+      loop_control:
+        label: "{{ item.name }}-map"
+
+    # --- Remove authenticator maps (global, not cascade-deleted) ---
+
+    - name: "Remove authenticator map for admins (org admin)"
+      ansible.platform.authenticator_map:
+        name: "{{ _offboard_team.team_name }}-admins-map"
+        authenticator: corporate-ldap
+        map_type: organization
+        state: absent
+
+    - name: "Remove LDAP authenticator map for operators"
+      ansible.platform.authenticator_map:
+        name: "{{ _offboard_team.team_name }}-operators-map"
+        authenticator: corporate-ldap
+        map_type: team
+        state: absent
+
+    # --- Remove credentials in Platform org (not cascade-deleted with team org) ---
+
+    - name: "Remove gateway credential: {{ _offboard_team.team_name }}-gateway-cred"
+      ansible.controller.credential:
+        name: "{{ _offboard_team.team_name }}-gateway-cred"
+        organization: Platform
+        credential_type: "AAP CaC Credential"
+        state: absent
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: "{{ aap_validate_certs }}"
+
+    # Vault credential (in team org) is cascade-deleted with the organization.
+
+    # --- Remove service account (global, not cascade-deleted) ---
+
+    - name: "Remove CaC service account: svc-{{ _offboard_team.team_name }}-cac"
+      ansible.platform.user:
+        username: "svc-{{ _offboard_team.team_name }}-cac"
+        state: absent
+
+    # --- Remove organization (cascades: teams, projects, JTs, inventories) ---
+
+    - name: "Remove organization: {{ _offboard_team.org_display_name }}"
+      ansible.platform.organization:
+        name: "{{ _offboard_team.org_display_name }}"
+        state: absent
+...

@@ -1,0 +1,60 @@
+---
+# Hub remote registries for syncing collections from external sources.
+#
+# This is the SINGLE SOURCE OF TRUTH for which collections are synced.
+# The playbook _hub_sync_tasks.yml reads requirements from here -- do NOT
+# duplicate collection lists in the playbook.
+#
+# To add a new collection to Hub:
+#   1. Add its name to the appropriate remote's `requirements` list below.
+#   2. PR, review, merge.
+#   3. Run sync_hub_collections.yml (or let apply_config pick it up).
+#
+# Fields:
+#   sync: true/false  -- whether sync_hub_collections.yml triggers a
+#         repository sync for this remote. Only remotes with sync: true
+#         AND a non-empty requirements list are synced.
+#   sync_dependencies: false  -- prevents pulling transitive dependencies
+#         from the remote source. Set this when dependencies live in a
+#         different remote (e.g., infra.aap_configuration depends on
+#         ansible.* collections that live in rh-certified, not validated).
+hub_collection_remote_all:
+  - name: rh-certified
+    url: "https://console.redhat.com/api/automation-hub/content/published/"
+    auth_url: "https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token"
+    token: "{{ redhat_api_token }}"
+    sync: true
+    requirements:
+      - name: ansible.controller
+      - name: ansible.platform
+      - name: ansible.hub
+      - name: ansible.eda
+    state: present
+
+  - name: validated
+    url: "https://console.redhat.com/api/automation-hub/content/validated/"
+    auth_url: "https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token"
+    token: "{{ redhat_api_token }}"
+    sync: true
+    # Disable dependency syncing: infra.aap_configuration depends on ansible.*
+    # collections that live in the rh-certified (published) remote, not here.
+    # List those dependencies explicitly in the rh-certified remote instead.
+    sync_dependencies: false
+    requirements:
+      - name: infra.aap_configuration
+    state: present
+
+  - name: community
+    url: "https://galaxy.ansible.com/api/"
+    sync: false
+    # To enable community sync, add a requirements filter and set sync: true.
+    # Always set sync_dependencies: false for community to prevent pulling
+    # all of Galaxy unfiltered.
+    # Example:
+    #   sync: true
+    #   sync_dependencies: false
+    #   requirements:
+    #     - name: community.general
+    #     - name: ansible.utils
+    state: present
+...

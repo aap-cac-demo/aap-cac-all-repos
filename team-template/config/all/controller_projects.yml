@@ -1,0 +1,13 @@
+---
+# Team projects -- define your playbook source repos here.
+controller_projects_all: []
+  # Example:
+  # - name: "app-playbooks"
+  #   organization: "Team-Alpha"
+  #   description: "Application deployment playbooks"
+  #   scm_type: git
+  #   scm_url: "https://github.com/example/app-playbooks.git"
+  #   scm_branch: main
+  #   scm_update_on_launch: true
+  #   state: present
+...

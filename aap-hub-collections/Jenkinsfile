@@ -1,0 +1,154 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(
+            name: 'COLLECTION_FILTER',
+            defaultValue: '',
+            description: 'Build only this collection (e.g. common_network). Leave blank to auto-detect changed collections.'
+        )
+    }
+
+    environment {
+        ANSIBLE_FORCE_COLOR = 'true'
+        ANSIBLE_CONFIG      = 'ansible.cfg'
+    }
+
+    stages {
+        stage('Detect Changed Collections') {
+            steps {
+                script {
+                    if (params.COLLECTION_FILTER) {
+                        env.CHANGED_COLLECTIONS = params.COLLECTION_FILTER
+                    } else {
+                        def changes = sh(
+                            script: '''
+                                git diff --name-only HEAD~1 HEAD \
+                                  | grep -E '^collections/' \
+                                  | sed 's|collections/||; s|/.*||' \
+                                  | sort -u \
+                                  | while read name; do
+                                      if [ -f "collections/${name}/galaxy.yml" ]; then
+                                        echo "${name}"
+                                      fi
+                                    done
+                            ''',
+                            returnStdout: true
+                        ).trim()
+                        env.CHANGED_COLLECTIONS = changes ?: ''
+                    }
+
+                    if (!env.CHANGED_COLLECTIONS) {
+                        echo 'No collection changes detected. Skipping build.'
+                        currentBuild.result = 'NOT_BUILT'
+                    } else {
+                        echo "Collections to build:\n${env.CHANGED_COLLECTIONS}"
+                    }
+                }
+            }
+        }
+
+        stage('Validate Namespace') {
+            when {
+                expression { env.CHANGED_COLLECTIONS }
+            }
+            steps {
+                sh '''
+                    EXPECTED_NS=$(grep "^namespace:" _config.yml | awk '{print $2}')
+                    FAILED=0
+                    for gf in collections/*/galaxy.yml; do
+                        ns=$(grep "^namespace:" "$gf" | awk '{print $2}')
+                        if [ "$ns" != "$EXPECTED_NS" ]; then
+                            echo "ERROR: $gf has namespace '$ns', expected '$EXPECTED_NS'"
+                            FAILED=1
+                        fi
+                    done
+                    if [ "$FAILED" -eq 1 ]; then
+                        echo "Namespace validation failed. All collections must use namespace '$EXPECTED_NS' from _config.yml."
+                        exit 1
+                    fi
+                    echo "Namespace validation passed: all collections use '$EXPECTED_NS'"
+                '''
+            }
+        }
+
+        stage('Lint') {
+            when {
+                expression { env.CHANGED_COLLECTIONS }
+            }
+            steps {
+                script {
+                    env.CHANGED_COLLECTIONS.split('\n').each { name ->
+                        sh "yamllint -d relaxed collections/${name}/galaxy.yml"
+                    }
+                }
+            }
+        }
+
+        stage('Build Collections') {
+            when {
+                expression { env.CHANGED_COLLECTIONS }
+            }
+            steps {
+                script {
+                    env.CHANGED_COLLECTIONS.split('\n').each { name ->
+                        echo "Building collection: ${name}"
+                        sh "ansible-galaxy collection build collections/${name}/ --output-path build/ --force"
+                    }
+                }
+            }
+        }
+
+        stage('Publish to Hub') {
+            when {
+                allOf {
+                    branch 'main'
+                    expression { env.CHANGED_COLLECTIONS }
+                }
+            }
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aap-hub-credentials',
+                        usernameVariable: 'ANSIBLE_GALAXY_SERVER_HUB_PUBLISHED_USERNAME',
+                        passwordVariable: 'ANSIBLE_GALAXY_SERVER_HUB_PUBLISHED_PASSWORD'
+                    )
+                ]) {
+                    script {
+                        def namespace = sh(
+                            script: "grep '^namespace:' _config.yml | awk '{print \$2}'",
+                            returnStdout: true
+                        ).trim()
+
+                        env.CHANGED_COLLECTIONS.split('\n').each { name ->
+                            def version = sh(
+                                script: "grep '^version:' collections/${name}/galaxy.yml | awk '{print \$2}'",
+                                returnStdout: true
+                            ).trim()
+                            def tarball = "build/${namespace}-${name}-${version}.tar.gz"
+
+                            echo "Publishing ${namespace}.${name} v${version} to Hub"
+                            sh "ansible-galaxy collection publish ${tarball} --server hub_published"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'rm -rf build/ || true'
+        }
+        failure {
+            echo 'Collection build pipeline failed. Check the logs above for details.'
+        }
+        success {
+            script {
+                if (env.CHANGED_COLLECTIONS) {
+                    echo "Successfully processed collections:\n${env.CHANGED_COLLECTIONS}"
+                }
+            }
+        }
+    }
+}

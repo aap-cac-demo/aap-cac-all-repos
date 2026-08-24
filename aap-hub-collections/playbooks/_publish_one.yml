@@ -1,0 +1,26 @@
+---
+# Build and publish a single collection. Included by publish_collection.yml.
+# Expects _coll.path to be set to the collection directory.
+
+- name: "Build tarball: {{ _coll.path | basename }}"
+  ansible.builtin.command:
+    cmd: >-
+      ansible-galaxy collection build
+      {{ _coll.path }}
+      --output-path {{ build_dir }}
+      --force
+  register: _build_result
+  changed_when: "'Created collection' in _build_result.stdout"
+
+- name: "Extract tarball path from build output"
+  ansible.builtin.set_fact:
+    _tarball: "{{ _build_result.stdout | regex_search('Created collection.*?(\\S+\\.tar\\.gz)', '\\1') | first }}"
+
+- name: "Publish to Hub: {{ _tarball | basename }}"
+  ansible.builtin.command:
+    cmd: >-
+      ansible-galaxy collection publish
+      {{ _tarball }}
+      --server hub_published
+  register: _publish_result
+  changed_when: "'Collection has been published' in _publish_result.stdout or 'Collection has been pushed' in _publish_result.stdout"

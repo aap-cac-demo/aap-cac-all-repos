@@ -1,0 +1,17 @@
+---
+# Template for new collections. Copy this directory to collections/<name>/
+# and fill in the fields below.
+#
+# The namespace is pre-filled and must NOT be changed -- it must match
+# the value in _config.yml and hub_custom_collection_namespace in
+# aap-platform-config.
+namespace: hig
+name: CHANGE_ME
+version: 0.1.0
+readme: README.md
+description: ""
+authors: []
+license:
+  - GPL-2.0-or-later
+dependencies: {}
+tags: []

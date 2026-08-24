@@ -1,0 +1,25 @@
+---
+# Team workflow job templates -- define multi-step automation here.
+controller_workflows_all: []
+  # Example:
+  # - name: "Full Deploy Pipeline"
+  #   organization: "Team-Alpha"
+  #   description: "Deploy, test, and validate application"
+  #   workflow_nodes:
+  #     - identifier: deploy
+  #       unified_job_template:
+  #         name: "Deploy Application"
+  #         organization:
+  #           name: "Team-Alpha"
+  #         type: job_template
+  #       related:
+  #         success_nodes:
+  #           - identifier: validate
+  #     - identifier: validate
+  #       unified_job_template:
+  #         name: "Validate Deployment"
+  #         organization:
+  #           name: "Team-Alpha"
+  #         type: job_template
+  #   state: present
+...

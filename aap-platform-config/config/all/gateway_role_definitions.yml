@@ -1,0 +1,142 @@
+---
+# Custom RBAC role definitions for AAP 2.7.
+#
+# Use this file to define roles beyond the built-in set. Custom roles are
+# applied by apply_config.yml via dispatch (infra.aap_configuration.dispatch).
+# Once created, custom roles can be used in sharing_definitions/ and in
+# team CaC repos (gateway_role_team_assignments.yml) just like built-in roles.
+#
+# HOW TO CREATE A CUSTOM ROLE:
+#   1. Choose a unique name (will appear in /api/gateway/v1/role_definitions/)
+#   2. Set content_type to the resource type the role targets (see reference below)
+#   3. List the permissions to grant (must be valid for the content_type)
+#   4. Uncomment and add to gateway_role_definitions_all list
+#   5. Run apply_config.yml to create the role in AAP
+#
+# CONTENT TYPES (for content_type field):
+#   awx.jobtemplate           - Job Templates
+#   awx.workflowjobtemplate   - Workflow Job Templates
+#   awx.credential            - Credentials
+#   awx.inventory             - Inventories
+#   awx.project               - Projects
+#   awx.instancegroup         - Instance Groups
+#   awx.executionenvironment  - Execution Environments
+#   awx.notificationtemplate  - Notification Templates
+#   shared.organization       - Organizations (org-wide roles)
+#   shared.team               - Teams
+#
+# AVAILABLE PERMISSIONS BY RESOURCE TYPE:
+#
+#   awx.jobtemplate:
+#     - awx.view_jobtemplate       (view JT settings and job output)
+#     - awx.execute_jobtemplate    (launch the JT)
+#     - awx.change_jobtemplate     (edit JT settings)
+#     - awx.delete_jobtemplate     (delete the JT)
+#
+#   awx.workflowjobtemplate:
+#     - awx.view_workflowjobtemplate     (view workflow settings)
+#     - awx.execute_workflowjobtemplate  (launch the workflow)
+#     - awx.approve_workflowjobtemplate  (approve workflow approval nodes)
+#     - awx.change_workflowjobtemplate   (edit workflow settings)
+#     - awx.delete_workflowjobtemplate   (delete the workflow)
+#
+#   awx.credential:
+#     - awx.view_credential        (view credential metadata; secrets never exposed)
+#     - awx.use_credential         (attach credential to JTs/projects)
+#     - awx.change_credential      (edit credential settings)
+#     - awx.delete_credential      (delete the credential)
+#
+#   awx.inventory:
+#     - awx.view_inventory         (view inventory hosts/groups)
+#     - awx.use_inventory          (attach inventory to JTs)
+#     - awx.adhoc_inventory        (run ad-hoc commands)
+#     - awx.update_inventory       (sync inventory sources)
+#     - awx.change_inventory       (edit inventory settings)
+#     - awx.delete_inventory       (delete the inventory)
+#
+#   awx.project:
+#     - awx.view_project           (view project settings)
+#     - awx.use_project            (attach project to JTs)
+#     - awx.update_project         (sync/update project from SCM)
+#     - awx.change_project         (edit project settings)
+#     - awx.delete_project         (delete the project)
+#
+#   awx.instancegroup:
+#     - awx.view_instancegroup     (view instance group)
+#     - awx.use_instancegroup      (assign to JTs/orgs)
+#     - awx.change_instancegroup   (edit instance group)
+#     - awx.delete_instancegroup   (delete instance group)
+#
+#   awx.executionenvironment:
+#     - awx.change_executionenvironment  (edit EE)
+#     - awx.delete_executionenvironment  (delete EE)
+#
+#   awx.notificationtemplate:
+#     - awx.view_notificationtemplate    (view notification template)
+#     - awx.change_notificationtemplate  (edit notification template)
+#     - awx.delete_notificationtemplate  (delete notification template)
+#
+# EXAMPLES:
+#
+# Example 1: View-only role for a single job template (no execute permission)
+#gateway_role_definitions_all:
+#  - name: "JobTemplate View"
+#    description: "Read-only access to a single job template"
+#    content_type: awx.jobtemplate
+#    permissions:
+#      - awx.view_jobtemplate
+#    state: present
+#
+# Example 2: View-only role for a single workflow
+#  - name: "WorkflowJobTemplate View"
+#    description: "Read-only access to a single workflow job template"
+#    content_type: awx.workflowjobtemplate
+#    permissions:
+#      - awx.view_workflowjobtemplate
+#    state: present
+#
+# Example 3: View-only role for a single credential (secrets never exposed)
+#  - name: "Credential View"
+#    description: "Read-only access to credential metadata"
+#    content_type: awx.credential
+#    permissions:
+#      - awx.view_credential
+#    state: present
+#
+# Example 4: View-only role for a single inventory
+#  - name: "Inventory View"
+#    description: "Read-only access to a single inventory"
+#    content_type: awx.inventory
+#    permissions:
+#      - awx.view_inventory
+#    state: present
+#
+# Example 5: View-only role for a single project
+#  - name: "Project View"
+#    description: "Read-only access to a single project"
+#    content_type: awx.project
+#    permissions:
+#      - awx.view_project
+#    state: present
+#
+# Example 6: Execute + view on a workflow, with approval permission
+#  - name: "WorkflowJobTemplate Execute and Approve"
+#    description: "Can execute and approve a single workflow"
+#    content_type: awx.workflowjobtemplate
+#    permissions:
+#      - awx.view_workflowjobtemplate
+#      - awx.execute_workflowjobtemplate
+#      - awx.approve_workflowjobtemplate
+#    state: present
+#
+# Example 7: Inventory read + ad-hoc (useful for troubleshooting access)
+#  - name: "Inventory View and Adhoc"
+#    description: "View inventory and run ad-hoc commands"
+#    content_type: awx.inventory
+#    permissions:
+#      - awx.view_inventory
+#      - awx.use_inventory
+#      - awx.adhoc_inventory
+#    state: present
+gateway_role_definitions_all: []
+...

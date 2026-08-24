@@ -1,0 +1,72 @@
+---
+# Manual build + publish fallback for custom collections.
+#
+# Use this when the Jenkins CI pipeline didn't run or for ad-hoc
+# re-publishing of a specific collection.
+#
+# Prerequisites:
+#   - Hub credentials exported as env vars (platform admin or any user
+#     with upload + approve permissions):
+#       export ANSIBLE_GALAXY_SERVER_HUB_PUBLISHED_USERNAME="admin"
+#       export ANSIBLE_GALAXY_SERVER_HUB_PUBLISHED_PASSWORD="xxx"
+#     These env vars also grant read access for dependency resolution
+#     during collection build.
+#
+# Usage:
+#   # Publish a specific collection
+#   ansible-playbook playbooks/publish_collection.yml \
+#     -e collection_name=common_network
+#
+#   # Publish all collections
+#   ansible-playbook playbooks/publish_collection.yml
+#
+# The collection tarball is built from source under collections/<name>/,
+# then published to Hub's staging repo. If Hub auto-approve is enabled,
+# it is automatically promoted to published. Otherwise, an admin must
+# approve it from the Hub approval dashboard.
+
+- name: Build and publish custom collections to Hub
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    collections_dir: "{{ playbook_dir }}/../collections"
+    build_dir: "{{ playbook_dir }}/../build"
+  tasks:
+    - name: Ensure build directory exists
+      ansible.builtin.file:
+        path: "{{ build_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Find collection directories
+      ansible.builtin.find:
+        paths: "{{ collections_dir }}"
+        file_type: directory
+        recurse: false
+      register: _all_collections
+
+    - name: Filter to requested collection (if specified)
+      ansible.builtin.set_fact:
+        _collections_to_publish: >-
+          {{
+            (collection_name is defined)
+            | ternary(
+                _all_collections.files | selectattr('path', 'search', '/' ~ collection_name ~ '$') | list,
+                _all_collections.files
+              )
+          }}
+
+    - name: Fail if no collections found
+      ansible.builtin.fail:
+        msg: >-
+          No collection directories found{{ ' matching ' ~ collection_name if collection_name is defined else '' }}.
+          Check that collections/ contains valid collection directories with galaxy.yml.
+      when: _collections_to_publish | length == 0
+
+    - name: Build and publish each collection
+      ansible.builtin.include_tasks: _publish_one.yml
+      loop: "{{ _collections_to_publish }}"
+      loop_control:
+        loop_var: _coll
+        label: "{{ _coll.path | basename }}"

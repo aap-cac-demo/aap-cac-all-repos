@@ -1,0 +1,14 @@
+---
+# Team job templates -- define your automation tasks here.
+controller_templates_all: []
+  # Example:
+  # - name: "Deploy Application"
+  #   organization: "Team-Alpha"
+  #   project: "app-playbooks"
+  #   playbook: "deploy.yml"
+  #   inventory: "app-servers"
+  #   execution_environment: "ee-supported"
+  #   credentials:
+  #     - "app-ssh-key"
+  #   state: present
+...

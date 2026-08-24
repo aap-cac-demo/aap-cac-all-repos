@@ -1,0 +1,9 @@
+---
+# Dev-specific inventories (additive to config/all/)
+controller_inventories_dev: []
+  # Example:
+  # - name: "app-servers-dev"
+  #   organization: "Team-Alpha"
+  #   description: "Dev application servers"
+  #   state: present
+...

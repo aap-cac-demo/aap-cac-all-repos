@@ -1,0 +1,10 @@
+---
+# Instance groups managed by the platform team.
+# Teams are assigned to instance groups during onboarding.
+controller_instance_groups_all: []
+  # Example:
+  # - name: "ig-network"
+  #   policy_instance_minimum: 1
+  #   policy_instance_percentage: 100
+  #   state: present
+...

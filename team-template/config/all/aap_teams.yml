@@ -1,0 +1,17 @@
+---
+# Sub-teams within your organization.
+# Team admins can create additional teams here for fine-grained RBAC.
+# The default operators team is created by the platform onboarding process.
+# Admin access is granted via authenticator map, not an AAP team.
+aap_teams_all: []
+  # Example:
+  # - name: "team-alpha-developers"
+  #   organization: "Team-Alpha"
+  #   state: present
+  # - name: "team-alpha-qa"
+  #   organization: "Team-Alpha"
+  #   state: present
+  # - name: "team-alpha-viewers"
+  #   organization: "Team-Alpha"
+  #   state: present
+...

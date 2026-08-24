@@ -1,0 +1,13 @@
+---
+exclude_paths:
+  - .github/
+  - changelogs/
+  - collections/
+skip_list:
+  - yaml[truthy]
+  - yaml[line-length]
+  - name[casing]
+  - var-naming[no-role-prefix]
+warn_list:
+  - experimental
+  - no-changed-when

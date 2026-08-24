@@ -1,0 +1,39 @@
+---
+# Sync upstream Hub collection remotes without running full dispatch.
+#
+# This is a standalone wrapper around _hub_sync_tasks.yml. Use it when
+# you need to pull new/updated collections from Red Hat, validated, or
+# community remotes without applying the full platform CaC.
+#
+# Usage:
+#   # Sync all remotes with sync: true
+#   ansible-playbook -i inventory/inventory_dev.yml -l dev \
+#     playbooks/sync_hub_collections.yml --vault-password-file=../.vault-pass
+#
+#   # Sync only specific remotes
+#   ansible-playbook -i inventory/inventory_dev.yml -l dev \
+#     playbooks/sync_hub_collections.yml --vault-password-file=../.vault-pass \
+#     -e 'hub_sync_remotes=["community"]'
+#
+# Which remotes are synced is controlled by the `sync` flag and `requirements`
+# list in config/all/hub_collection_remote.yml.
+
+- name: Sync Hub collection remotes
+  hosts: all
+  connection: local
+  tasks:
+    - name: Include common vars
+      ansible.builtin.include_vars:
+        dir: ../config/all
+        extensions:
+          - 'yml'
+
+    - name: Include env vars
+      ansible.builtin.include_vars:
+        dir: "../config/{{ env }}"
+        extensions:
+          - 'yml'
+        ignore_files: "{{ (_cred_injected | default(false)) | ternary(['secrets.yml'], []) }}"
+
+    - name: Sync Hub remotes and collections
+      ansible.builtin.include_tasks: _hub_sync_tasks.yml

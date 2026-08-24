@@ -1,0 +1,13 @@
+---
+all:
+  children:
+    staging:
+      hosts:
+        localhost:
+  vars:
+    env: staging
+    aap_hostname: "aap-gateway.staging.example.com"
+    aap_username: "{{ aap_user | default('admin') }}"
+    aap_password: "{{ aap_pass }}"
+    aap_validate_certs: true
+...

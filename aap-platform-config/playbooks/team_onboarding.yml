@@ -1,0 +1,51 @@
+---
+- name: Onboard a new team to AAP
+  hosts: all
+  connection: local
+  vars_files:
+    - ../config/{{ env }}/secrets.yml
+  vars:
+    team_def_dir: "../team_definitions"
+  module_defaults:
+    group/ansible.platform.gateway:
+      aap_hostname: "{{ aap_hostname }}"
+      aap_username: "{{ aap_username }}"
+      aap_password: "{{ aap_password }}"
+      aap_validate_certs: "{{ aap_validate_certs }}"
+  tasks:
+    - name: Include env secrets
+      ansible.builtin.include_vars:
+        dir: "../config/{{ env }}"
+        extensions:
+          - 'yml'
+
+    - name: Find all team definition files
+      ansible.builtin.find:
+        paths: "{{ team_def_dir }}"
+        patterns: "*.yml"
+      register: team_files
+      delegate_to: localhost
+
+    - name: Load team definitions
+      ansible.builtin.include_vars:
+        file: "{{ item.path }}"
+        name: "team_{{ item.path | basename | regex_replace('.yml$', '') | regex_replace('-', '_') }}"
+      loop: "{{ team_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+    - name: Build team list from loaded definitions
+      ansible.builtin.set_fact:
+        teams_to_onboard: >-
+          {{
+            team_files.files | map(attribute='path') | map('basename') |
+            map('regex_replace', '.yml$', '') | map('regex_replace', '-', '_') |
+            map('regex_replace', '^', 'team_') | list
+          }}
+
+    - name: Onboard each team
+      ansible.builtin.include_tasks: _team_onboard_tasks.yml
+      loop: "{{ teams_to_onboard }}"
+      loop_control:
+        loop_var: team_var_name
+...

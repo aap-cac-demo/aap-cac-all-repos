@@ -1,0 +1,42 @@
+---
+# Role assignments for sub-teams within your organization.
+# Use this to grant fine-grained permissions to sub-teams defined in aap_teams.yml.
+# Each entry assigns a role_definition to a team on specific resources.
+# A single sub-team can have multiple role assignments (one entry per role).
+gateway_role_team_assignments_all: []
+  # Example: developers get org-wide execute + admin on a specific project
+  # - team: team-alpha-developers
+  #   role_definition: Organization Execute
+  #   assignment_objects:
+  #     - name: Team-Alpha
+  #       type: organizations
+  #   state: present
+  # - team: team-alpha-developers
+  #   role_definition: Project Admin
+  #   assignment_objects:
+  #     - name: app-playbooks
+  #       type: projects
+  #   state: present
+  #
+  # Example: QA team gets org-wide execute + inventory admin
+  # - team: team-alpha-qa
+  #   role_definition: Organization Execute
+  #   assignment_objects:
+  #     - name: Team-Alpha
+  #       type: organizations
+  #   state: present
+  # - team: team-alpha-qa
+  #   role_definition: Inventory Admin
+  #   assignment_objects:
+  #     - name: qa-servers
+  #       type: inventories
+  #   state: present
+  #
+  # Example: viewers get read-only access
+  # - team: team-alpha-viewers
+  #   role_definition: Organization Auditor
+  #   assignment_objects:
+  #     - name: Team-Alpha
+  #       type: organizations
+  #   state: present
+...

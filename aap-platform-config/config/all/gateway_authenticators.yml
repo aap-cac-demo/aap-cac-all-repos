@@ -1,0 +1,32 @@
+---
+# LDAP authenticator configuration
+# Update the connection details to match your corporate LDAP/AD environment
+gateway_authenticators_all:
+  - name: corporate-ldap
+    type: ansible_base.authentication.authenticator_plugins.ldap
+    enabled: true
+    configuration:
+      SERVER_URI: 
+        - "{{ ldap_host }}"
+      BIND_DN: "{{ ldap_bind_dn }}"
+      BIND_PASSWORD: "{{ ldap_bind_password }}"
+      USER_SEARCH:
+        - ou=people,dc=example,dc=com
+        - SCOPE_SUBTREE
+        - (uid=%(user)s)
+      USER_DN_TEMPLATE: null
+      USER_ATTR_MAP:
+        first_name: givenName
+        last_name: sn
+        email: mail
+      GROUP_SEARCH:
+        - ou=groups,dc=example,dc=com
+        - SCOPE_SUBTREE
+        - (objectClass=groupOfNames)
+      GROUP_TYPE: "GroupOfNamesType"
+      GROUP_TYPE_PARAMS:
+        name_attr: "cn"
+      START_TLS: false
+    order: 2
+    state: present
+...

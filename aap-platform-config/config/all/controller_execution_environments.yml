@@ -1,0 +1,29 @@
+---
+# Execution Environments managed by the platform team.
+# Built via the aap-ee-builds repo and registered here.
+#
+# Scope enforcement:
+#   - Global EEs: organization field OMITTED -> visible to ALL orgs
+#   - Team-exclusive EEs: organization set to a specific org -> only that org sees it
+controller_execution_environments_all:
+  # --- Global EEs (no organization = visible to all orgs) ---
+  - name: ee-supported
+    image: "registry.redhat.io/ansible-automation-platform-27/ee-supported-rhel9:latest"
+    pull: missing
+    state: present
+
+  - name: ee-minimal
+    image: "registry.redhat.io/ansible-automation-platform-27/ee-minimal-rhel9:latest"
+    pull: missing
+    state: present
+
+  # --- Team-exclusive EEs (organization scoped) ---
+  # Add team-exclusive EEs below. The organization field restricts visibility
+  # to that org only. Other orgs cannot see or use these EEs.
+  # Example:
+  # - name: ee-team-alpha-ml
+  #   image: "hub.example.com/ee-team-alpha-ml:1.2.0"
+  #   organization: Team-Alpha
+  #   pull: missing
+  #   state: present
+...

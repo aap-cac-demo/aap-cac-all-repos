@@ -1,0 +1,29 @@
+---
+# Platform variables (non-dispatch).
+# These are plain Ansible variables consumed by Jinja2 templates.
+# Dispatch resource lists go in config/all/ and config/{env}/ with _all/_env suffixes.
+
+# Platform CaC project SCM URL (required) -- used by controller_projects_all
+platform_cac_repo_url: "https://forgejo.smalick.com/aap-cac-demo/aap-platform-config.git"
+
+# --- Hub Galaxy token lifecycle ---
+# See design doc Section 2.4.2a for details.
+#
+# hub_galaxy_token_expire_seconds
+#   Controls the Gateway PAT lifetime AND the refresh schedule.
+#   Pushed to the Gateway via gateway_access_token_expiration.
+#   Default: 31536000 (1 year). Red Hat recommends 28800 (8 hours)
+#   for hardened environments.
+#
+# hub_galaxy_token_refresh_buffer
+#   Fraction of the token lifetime at which the scheduled job
+#   refreshes the token. 0.75 = refresh at 75%, leaving 25% margin.
+hub_galaxy_token_expire_seconds: 31536000
+hub_galaxy_token_refresh_buffer: 0.75
+
+# --- Hub custom collection namespace ---
+# Namespace used for internally published collections in the aap-hub-collections repo.
+# Must match the namespace value in aap-hub-collections/_config.yml and every
+# collection's galaxy.yml under that repo.
+hub_custom_collection_namespace: "hig"
+...

@@ -1,0 +1,40 @@
+---
+- name: Apply cross-org resource sharing (API-based)
+  hosts: all
+  connection: local
+  vars_files:
+    - ../config/{{ env }}/secrets.yml
+  vars:
+    sharing_def_dir: "../sharing_definitions"
+  tasks:
+    - name: Find all sharing definition files
+      ansible.builtin.find:
+        paths: "{{ sharing_def_dir }}"
+        patterns: "*.yml"
+        excludes: "*.sample"
+      register: sharing_files
+      delegate_to: localhost
+
+    - name: Load sharing definitions
+      ansible.builtin.include_vars:
+        file: "{{ item.path }}"
+        name: "sharing_{{ item.path | basename | regex_replace('.yml$', '') | regex_replace('-', '_') }}"
+      loop: "{{ sharing_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+    - name: Build sharing list from loaded definitions
+      ansible.builtin.set_fact:
+        sharing_definitions: >-
+          {{
+            sharing_files.files | map(attribute='path') | map('basename') |
+            map('regex_replace', '.yml$', '') | map('regex_replace', '-', '_') |
+            map('regex_replace', '^', 'sharing_') | list
+          }}
+
+    - name: Apply each sharing definition
+      ansible.builtin.include_tasks: _apply_sharing_api_tasks.yml
+      loop: "{{ sharing_definitions }}"
+      loop_control:
+        loop_var: sharing_var_name
+...

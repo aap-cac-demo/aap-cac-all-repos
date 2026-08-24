@@ -1,0 +1,163 @@
+---
+# Included by _apply_sharing_api_tasks.yml for each grant entry.
+# Resolves the resource ID (scoped to owner org) and role_definition ID,
+# then creates or removes the role_team_assignment via the Gateway API.
+#
+# Implementation Notes (AAP 2.7):
+# - Controller resources (JTs, credentials, inventories, projects) are resolved via
+#   /api/controller/v2/<resource_type>/?name=<name>&organization=<org_id>
+# - Organization resources are resolved via /api/gateway/v1/organizations/?name=<name>
+# - Role definitions are resolved via /api/gateway/v1/role_definitions/?name=<name>
+# - POST to /api/gateway/v1/role_team_assignments/ expects:
+#     team: integer (team ID)
+#     role_definition: integer (role definition ID)
+#     object_id: string (resource ID as string, e.g. "22")
+# - The API returns 400 if the assignment already exists, so we check first.
+# - DELETE returns 204 on success, 404 if already gone.
+# - Organization IDs are consistent between gateway and controller APIs.
+#
+# Expects: _grant, _sharing, _consumer_team_id, _owner_org_id
+
+# Map sharing definition resource_type to Controller API endpoint paths.
+# Controller resources are resolved via /api/controller/v2/<endpoint>/.
+# Organization resources are resolved via /api/gateway/v1/organizations/.
+- name: "Map resource type to API endpoint"
+  ansible.builtin.set_fact:
+    _resource_api_map:
+      job_templates: "job_templates"
+      workflows: "workflow_job_templates"
+      credentials: "credentials"
+      inventories: "inventories"
+      projects: "projects"
+      organizations: "organizations"
+
+- name: "Validate resource_type is supported"
+  ansible.builtin.assert:
+    that:
+      - _grant.resource_type in _resource_api_map
+    fail_msg: >-
+      Unsupported resource_type '{{ _grant.resource_type }}'.
+      Supported types: {{ _resource_api_map.keys() | list | join(', ') }}
+
+# --- Resolve resource ID (scoped to owner org) ---
+# For controller resources (JTs, credentials, etc.), use /api/controller/v2/ with org filter.
+# For organizations, use /api/gateway/v1/organizations/ (gateway-level resource).
+
+- name: "Resolve resource ID via gateway: {{ _grant.resource_name }} (organizations)"
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/gateway/v1/organizations/?name={{ _grant.resource_name | urlencode }}"
+    method: GET
+    user: "{{ aap_username }}"
+    password: "{{ aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ aap_validate_certs }}"
+    status_code: 200
+  register: _resource_lookup
+  when: _grant.resource_type == 'organizations'
+
+- name: "Resolve resource ID via controller: {{ _grant.resource_name }} ({{ _grant.resource_type }} in {{ _sharing.owner_org }})"
+  ansible.builtin.uri:
+    url: >-
+      {{ aap_hostname }}/api/controller/v2/{{ _resource_api_map[_grant.resource_type] }}/?name={{ _grant.resource_name | urlencode }}&organization={{ _owner_org_id }}
+    method: GET
+    user: "{{ aap_username }}"
+    password: "{{ aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ aap_validate_certs }}"
+    status_code: 200
+  register: _resource_lookup
+  when: _grant.resource_type != 'organizations'
+
+- name: "Fail if resource not found in owner org"
+  ansible.builtin.fail:
+    msg: >-
+      Resource '{{ _grant.resource_name }}' (type: {{ _grant.resource_type }}) not found
+      in organization '{{ _sharing.owner_org }}'. Ensure the resource exists before
+      applying sharing.
+  when: _resource_lookup.json.count == 0
+
+- name: "Set resource ID"
+  ansible.builtin.set_fact:
+    _resource_id: "{{ _resource_lookup.json.results[0].id }}"
+
+# --- Resolve role definition ID ---
+
+- name: "Resolve role definition ID: {{ _grant.role_definition }}"
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/gateway/v1/role_definitions/?name={{ _grant.role_definition | urlencode }}"
+    method: GET
+    user: "{{ aap_username }}"
+    password: "{{ aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ aap_validate_certs }}"
+    status_code: 200
+  register: _role_def_lookup
+
+- name: "Fail if role definition not found"
+  ansible.builtin.fail:
+    msg: >-
+      Role definition '{{ _grant.role_definition }}' not found in AAP.
+      Built-in resource-scoped roles: JobTemplate Execute, JobTemplate Admin,
+      WorkflowJobTemplate Execute, WorkflowJobTemplate Admin, Credential Use,
+      Credential Admin, Inventory Use, Inventory Admin, Project Use, Project Admin.
+      Org-level roles: Organization Execute, Organization Audit,
+      Organization Inventory Admin, Organization Credential Admin.
+  when: _role_def_lookup.json.count == 0
+
+- name: "Set role definition ID"
+  ansible.builtin.set_fact:
+    _role_def_id: "{{ _role_def_lookup.json.results[0].id }}"
+
+# --- Check if assignment already exists ---
+
+- name: "Check if role assignment already exists"
+  ansible.builtin.uri:
+    url: >-
+      {{ aap_hostname }}/api/gateway/v1/role_team_assignments/?team={{ _consumer_team_id }}&role_definition={{ _role_def_id }}&object_id={{ _resource_id }}
+    method: GET
+    user: "{{ aap_username }}"
+    password: "{{ aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ aap_validate_certs }}"
+    status_code: 200
+  register: _existing_assignment
+
+# --- Create assignment (state: present) ---
+
+- name: "Create role assignment: {{ _grant.role_definition }} on {{ _grant.resource_name }}"
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/gateway/v1/role_team_assignments/"
+    method: POST
+    user: "{{ aap_username }}"
+    password: "{{ aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ aap_validate_certs }}"
+    body_format: json
+    body:
+      team: "{{ _consumer_team_id | int }}"
+      role_definition: "{{ _role_def_id | int }}"
+      object_id: "{{ _resource_id }}"
+    status_code: [200, 201]
+  when:
+    - _sharing.state == 'present'
+    - _existing_assignment.json.count == 0
+  register: _create_result
+  changed_when: _create_result.status | default(0) in [200, 201]
+
+# --- Remove assignment (state: absent) ---
+
+- name: "Remove role assignment: {{ _grant.role_definition }} on {{ _grant.resource_name }}"
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/gateway/v1/role_team_assignments/{{ _existing_assignment.json.results[0].id }}/"
+    method: DELETE
+    user: "{{ aap_username }}"
+    password: "{{ aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ aap_validate_certs }}"
+    status_code: [204, 404]
+  when:
+    - _sharing.state == 'absent'
+    - _existing_assignment.json.count > 0
+  register: _delete_result
+  changed_when: _delete_result.status | default(0) == 204
+...

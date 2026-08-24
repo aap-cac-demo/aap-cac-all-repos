@@ -1,0 +1,57 @@
+---
+# Hub collection repositories (content pipelines).
+#
+# Repositories with a `remote` sync collections from external sources.
+# Repositories without a `remote` receive uploads (staging) or approved
+# promotions (published).
+#
+# staging and published are Hub defaults but are declared here to
+# guarantee they exist -- idempotent if Hub already created them.
+hub_collection_repository_all:
+  - name: rh-certified
+    description: "Red Hat Certified Content"
+    remote: rh-certified
+    pipeline: approved
+    distribution:
+      name: rh-certified
+      base_path: rh-certified
+    state: present
+
+  - name: validated
+    description: "Ansible Validated Content"
+    remote: validated
+    pipeline: approved
+    distribution:
+      name: validated
+      base_path: validated
+    state: present
+
+  - name: community
+    description: "Community Content"
+    remote: community
+    pipeline: approved
+    distribution:
+      name: community
+      base_path: community
+    state: present
+
+  # --- Custom collection pipeline ---
+  # Collections uploaded via ansible-galaxy collection publish land in staging.
+  # After approval (manual or auto-approve), they move to published.
+
+  - name: staging
+    description: "Collection staging (upload landing zone)"
+    pipeline: staging
+    distribution:
+      name: staging
+      base_path: staging
+    state: present
+
+  - name: published
+    description: "Approved collections for consumption"
+    pipeline: approved
+    distribution:
+      name: published
+      base_path: published
+    state: present
+...

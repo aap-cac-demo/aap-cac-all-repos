@@ -1,0 +1,87 @@
+---
+# Included by apply_sharing_api.yml for each sharing definition.
+# Uses ansible.builtin.uri with the Gateway API to create cross-org grants.
+# This approach avoids known module bugs with cross-org resource resolution
+# by explicitly resolving resource IDs scoped to the owner organization.
+#
+# Teams and organizations are resolved via the gateway API (/api/gateway/v1/)
+# because these are platform-level resources managed by the gateway.
+# The gateway team/org IDs are the same IDs used in role_team_assignments.
+#
+# Expects sharing_var_name to be set (e.g., "sharing_team_bravo_from_team_alpha").
+
+- name: "Set sharing facts for {{ sharing_var_name }}"
+  ansible.builtin.set_fact:
+    _sharing: "{{ lookup('vars', sharing_var_name) }}"
+
+- name: "Validate required fields: {{ _sharing.sharing_name }}"
+  ansible.builtin.assert:
+    that:
+      - _sharing.sharing_name is defined
+      - _sharing.owner_org is defined
+      - _sharing.consumer_team is defined
+      - _sharing.grants is defined
+      - _sharing.grants | length > 0
+      - _sharing.state is defined
+      - _sharing.state in ['present', 'absent']
+    fail_msg: >-
+      Sharing definition '{{ sharing_var_name }}' is missing required fields.
+      Required: sharing_name, owner_org, consumer_team, grants[], state.
+
+# --- Resolve the consumer team ID ---
+
+- name: "Resolve consumer team ID: {{ _sharing.consumer_team }}"
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/gateway/v1/teams/?name={{ _sharing.consumer_team | urlencode }}"
+    method: GET
+    user: "{{ aap_username }}"
+    password: "{{ aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ aap_validate_certs }}"
+    status_code: 200
+  register: _team_lookup
+
+- name: "Fail if consumer team not found"
+  ansible.builtin.fail:
+    msg: >-
+      Consumer team '{{ _sharing.consumer_team }}' not found in AAP.
+      The team must be created (via team onboarding) before sharing can be applied.
+  when: _team_lookup.json.count == 0
+
+- name: "Set consumer team ID"
+  ansible.builtin.set_fact:
+    _consumer_team_id: "{{ _team_lookup.json.results[0].id }}"
+
+# --- Resolve the owner organization ID ---
+
+- name: "Resolve owner organization ID: {{ _sharing.owner_org }}"
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/gateway/v1/organizations/?name={{ _sharing.owner_org | urlencode }}"
+    method: GET
+    user: "{{ aap_username }}"
+    password: "{{ aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ aap_validate_certs }}"
+    status_code: 200
+  register: _org_lookup
+
+- name: "Fail if owner organization not found"
+  ansible.builtin.fail:
+    msg: >-
+      Owner organization '{{ _sharing.owner_org }}' not found in AAP.
+      The organization must be onboarded before sharing can be applied.
+  when: _org_lookup.json.count == 0
+
+- name: "Set owner organization ID"
+  ansible.builtin.set_fact:
+    _owner_org_id: "{{ _org_lookup.json.results[0].id }}"
+
+# --- Process each grant ---
+
+- name: "Process grants for {{ _sharing.sharing_name }}"
+  ansible.builtin.include_tasks: _apply_sharing_api_grant.yml
+  loop: "{{ _sharing.grants }}"
+  loop_control:
+    loop_var: _grant
+    label: "{{ _sharing.consumer_team }} -> {{ _grant.role_definition }} on {{ _grant.resource_type }}/{{ _grant.resource_name }}"
+...

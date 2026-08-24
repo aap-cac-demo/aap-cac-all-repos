@@ -1,0 +1,294 @@
+---
+# Included by team_onboarding.yml for each team definition.
+# Expects team_var_name to be set (e.g., "team_team_alpha").
+
+- name: "Set team facts for {{ team_var_name }}"
+  ansible.builtin.set_fact:
+    _team: "{{ lookup('vars', team_var_name) }}"
+
+# --- Pre-flight validation ---
+
+- name: "Validate CaC repo is reachable: {{ _team.cac_repo_url }}"
+  ansible.builtin.uri:
+    url: "{{ _team.cac_repo_url | regex_replace('\\.git$', '') }}"
+    method: HEAD
+    status_code: [200, 301, 302]
+    timeout: 10
+  register: _repo_check
+  failed_when: false
+
+- name: "Fail if CaC repo does not exist"
+  ansible.builtin.fail:
+    msg: >-
+      CaC repo '{{ _team.cac_repo_url }}' is not reachable
+      (HTTP {{ _repo_check.status | default('unreachable') }}).
+      The team must clone the template repo and create
+      '{{ _team.cac_repo_url }}' before onboarding can proceed.
+  when: _repo_check.status is not defined or _repo_check.status not in [200, 301, 302]
+
+# --- Organization ---
+
+- name: "Create organization: {{ _team.org_display_name }}"
+  ansible.platform.organization:
+    name: "{{ _team.org_display_name }}"
+    description: "{{ _team.description | default('') }}"
+    state: present
+
+# ansible.controller.organization is required here because galaxy_credentials
+# is a Controller-level attribute not supported by ansible.platform.organization.
+- name: "Attach Galaxy credentials to org: {{ _team.org_display_name }}"
+  ansible.controller.organization:
+    name: "{{ _team.org_display_name }}"
+    galaxy_credentials:
+      - hub-galaxy-rh-certified
+      - hub-galaxy-validated
+      - hub-galaxy-published
+    state: present
+    controller_host: "{{ aap_hostname }}"
+    controller_username: "{{ aap_username }}"
+    controller_password: "{{ aap_password }}"
+    validate_certs: "{{ aap_validate_certs }}"
+
+# --- Admin RBAC via authenticator map ---
+# Organization Admin is granted directly to the admins LDAP group via
+# authenticator map (map_type: organization). No AAP team is created for
+# admins because the Gateway API blocks assigning Organization Admin
+# (which includes Organization Member) to teams.
+
+- name: "Grant Organization Admin to admins via authenticator map"
+  ansible.platform.authenticator_map:
+    name: "{{ _team.team_name }}-admins-map"
+    authenticator: corporate-ldap
+    map_type: organization
+    organization: "{{ _team.org_display_name }}"
+    role: "Organization Admin"
+    triggers:
+      groups:
+        has_or:
+          - "{{ _team.ldap_groups.admins }}"
+    state: present
+
+# --- Operators team ---
+
+- name: "Create operators team: {{ _team.team_name }}-operators"
+  ansible.platform.team:
+    name: "{{ _team.team_name }}-operators"
+    organization: "{{ _team.org_display_name }}"
+    state: present
+
+- name: "Map LDAP group for operators: {{ _team.ldap_groups.operators }}"
+  ansible.platform.authenticator_map:
+    name: "{{ _team.team_name }}-operators-map"
+    authenticator: corporate-ldap
+    map_type: team
+    triggers:
+      groups:
+        has_or:
+          - "{{ _team.ldap_groups.operators }}"
+    organization: "{{ _team.org_display_name }}"
+    team: "{{ _team.team_name }}-operators"
+    role: "Team Member"
+    state: present
+
+- name: "Assign Organization Execute role to operators team"
+  ansible.platform.role_team_assignment:
+    team: "{{ _team.team_name }}-operators"
+    role_definition: Organization Execute
+    assignment_objects:
+      - name: "{{ _team.org_display_name }}"
+        type: organizations
+    state: present
+
+# --- Custom sub-teams (optional, defined in team_definitions/<team>.yml) ---
+
+- name: "Create custom sub-teams"
+  ansible.platform.team:
+    name: "{{ item.name }}"
+    organization: "{{ _team.org_display_name }}"
+    state: present
+  loop: "{{ _team.custom_teams | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: "Map LDAP groups for custom sub-teams"
+  ansible.platform.authenticator_map:
+    name: "{{ item.name }}-map"
+    authenticator: corporate-ldap
+    map_type: team
+    triggers:
+      groups:
+        has_or:
+          - "{{ item.ldap_group }}"
+    organization: "{{ _team.org_display_name }}"
+    team: "{{ item.name }}"
+    role: "Team Member"
+    state: present
+  loop: "{{ _team.custom_teams | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.ldap_group is defined
+
+- name: "Assign org-level role to custom sub-teams"
+  ansible.platform.role_team_assignment:
+    team: "{{ item.name }}"
+    role_definition: "{{ item.org_role }}"
+    assignment_objects:
+      - name: "{{ _team.org_display_name }}"
+        type: organizations
+    state: present
+  loop: "{{ _team.custom_teams | default([]) }}"
+  loop_control:
+    label: "{{ item.name }} -> {{ item.org_role | default('skipped') }}"
+  when: item.org_role is defined
+
+# --- CaC service account provisioning ---
+# Creates a local service account with Organization Admin on the team's org.
+# The password is generated at runtime and stored only in the AAP Credential object.
+#
+# Idempotency: update_secrets: false means the user password is only set on first
+# creation. The credential task is gated on _svc_account_result.changed so it only
+# runs when the user is actually created -- this keeps the user and credential
+# passwords in sync across re-runs.
+#
+# Edge case: if the credential is manually deleted but the user still exists,
+# re-running onboarding will NOT recreate the credential (user unchanged -> skip).
+# Recovery: delete the service account user in AAP, then re-run onboarding so both
+# are recreated together with a matching password.
+
+- name: "Generate password for CaC service account"
+  ansible.builtin.set_fact:
+    _team_svc_password: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits,punctuation') }}"
+  no_log: true
+
+- name: "Create CaC service account: svc-{{ _team.team_name }}-cac"
+  ansible.platform.user:
+    username: "svc-{{ _team.team_name }}-cac"
+    password: "{{ _team_svc_password }}"
+    first_name: "Service"
+    last_name: "{{ _team.org_display_name }} CaC"
+    email: "svc-{{ _team.team_name }}-cac@noreply.local"
+    is_superuser: false
+    update_secrets: false
+    state: present
+  register: _svc_account_result
+  no_log: true
+
+- name: "Grant Organization Admin to CaC service account"
+  ansible.platform.role_user_assignment:
+    user: "svc-{{ _team.team_name }}-cac"
+    role_definition: "Organization Admin"
+    object_ids:
+      - "{{ _team.org_display_name }}"
+    state: present
+
+# Uses custom "AAP CaC Credential" type (defined in controller_credential_types.yml)
+# instead of the built-in "Red Hat Ansible Automation Platform" type, because
+# dispatch needs both CONTROLLER_* and AAP_* env vars for ansible.controller
+# and ansible.platform modules respectively.
+- name: "Create AAP gateway credential for team CaC"
+  ansible.controller.credential:
+    name: "{{ _team.team_name }}-gateway-cred"
+    description: "AAP gateway credential for {{ _team.org_display_name }} CaC execution"
+    organization: "Platform"
+    credential_type: "AAP CaC Credential"
+    inputs:
+      host: "{{ aap_hostname }}"
+      username: "svc-{{ _team.team_name }}-cac"
+      password: "{{ _team_svc_password }}"
+      verify_ssl: "{{ aap_validate_certs }}"
+    state: present
+    controller_host: "{{ aap_hostname }}"
+    controller_username: "{{ aap_username }}"
+    controller_password: "{{ aap_password }}"
+    validate_certs: "{{ aap_validate_certs }}"
+  no_log: true
+  when: _svc_account_result is changed
+
+# --- Vault credential for team secrets ---
+# Created with a random placeholder password. The team admin can update the
+# password in AAP UI when they start using vault-encrypted secrets in their
+# config/<env>/secrets.yml. update_secrets: false prevents re-runs from
+# overwriting the team's chosen password.
+
+- name: "Generate vault password placeholder for team"
+  ansible.builtin.set_fact:
+    _team_vault_password: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+  no_log: true
+
+- name: "Create Vault credential for team CaC"
+  ansible.controller.credential:
+    name: "{{ _team.team_name }}-vault-password"
+    description: "Ansible Vault password for {{ _team.org_display_name }} CaC secrets"
+    organization: "{{ _team.org_display_name }}"
+    credential_type: "Vault"
+    inputs:
+      vault_password: "{{ _team_vault_password }}"
+    update_secrets: false
+    state: present
+    controller_host: "{{ aap_hostname }}"
+    controller_username: "{{ aap_username }}"
+    controller_password: "{{ aap_password }}"
+    validate_certs: "{{ aap_validate_certs }}"
+  no_log: true
+
+# --- CaC project and job template ---
+
+- name: "Create CaC localhost inventory in team org"
+  ansible.controller.inventory:
+    name: "{{ _team.team_name }}-cac-localhost"
+    description: "Localhost inventory for {{ _team.org_display_name }} CaC execution"
+    organization: "{{ _team.org_display_name }}"
+    state: present
+    controller_host: "{{ aap_hostname }}"
+    controller_username: "{{ aap_username }}"
+    controller_password: "{{ aap_password }}"
+    validate_certs: "{{ aap_validate_certs }}"
+
+- name: "Add localhost to CaC inventory"
+  ansible.controller.host:
+    name: "localhost"
+    inventory: "{{ _team.team_name }}-cac-localhost"
+    variables:
+      ansible_connection: local
+      ansible_python_interpreter: "{{ '{{' }} ansible_playbook_python {{ '}}' }}"
+    state: present
+    controller_host: "{{ aap_hostname }}"
+    controller_username: "{{ aap_username }}"
+    controller_password: "{{ aap_password }}"
+    validate_certs: "{{ aap_validate_certs }}"
+
+- name: "Create CaC project in team org"
+  ansible.controller.project:
+    name: "{{ _team.team_name }}-cac"
+    description: "Configuration as Code for {{ _team.org_display_name }}"
+    organization: "{{ _team.org_display_name }}"
+    scm_type: git
+    scm_url: "{{ _team.cac_repo_url }}"
+    scm_branch: main
+    credential: scm-github
+    scm_update_on_launch: true
+    state: present
+    controller_host: "{{ aap_hostname }}"
+    controller_username: "{{ aap_username }}"
+    controller_password: "{{ aap_password }}"
+    validate_certs: "{{ aap_validate_certs }}"
+
+- name: "Create CaC job template in team org"
+  ansible.controller.job_template:
+    name: "{{ _team.team_name }} - Apply Team Config"
+    description: "Apply Configuration as Code for {{ _team.org_display_name }}"
+    organization: "{{ _team.org_display_name }}"
+    project: "{{ _team.team_name }}-cac"
+    playbook: "playbooks/apply_team_config.yml"
+    inventory: "{{ _team.team_name }}-cac-localhost"
+    execution_environment: "ee-supported"
+    extra_vars:
+      env: "{{ env }}"
+    credentials:
+      - "{{ _team.team_name }}-gateway-cred"
+      - "{{ _team.team_name }}-vault-password"
+    state: present
+    controller_host: "{{ aap_hostname }}"
+    controller_username: "{{ aap_username }}"
+    controller_password: "{{ aap_password }}"
+    validate_certs: "{{ aap_validate_certs }}"

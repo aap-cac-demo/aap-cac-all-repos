@@ -1,0 +1,13 @@
+---
+all:
+  children:
+    prod:
+      hosts:
+        localhost:
+  vars:
+    env: prod
+    aap_hostname: "aap-gateway.prod.example.com"
+    aap_username: "{{ aap_user | default('admin') }}"
+    aap_password: "{{ aap_pass }}"
+    aap_validate_certs: true
+...

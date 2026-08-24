@@ -1,0 +1,35 @@
+---
+# Team definition for Team Delta Shared
+# This file drives the team_onboarding.yml playbook.
+# One file per team under team_definitions/.
+
+team_name: "team-delta-shared"
+org_display_name: "Team-DeltaShared"
+description: "Delta team Shared automation resources"
+
+metadata:
+  contacts:
+    - name: "Jane Doe"
+      email: "jdoe@example.com"
+      role: "Technical Lead"
+    - name: "John Smith"
+      email: "jsmith@example.com"
+      role: "Product Owner"
+  cost_center: "CC-67890"
+  business_unit: "Engineering"
+  slack_channel: "#team-bravo-aap"
+  jira_project: "Delta Shared"
+  onboarded_date: "2026-08-15"
+  tags:
+    - automation
+    - infrastructure
+
+ldap_groups:
+  admins: "cn=aap-team-delta-shared-admins,ou=groups,dc=example,dc=com"
+  operators: "cn=aap-team-delta-operators,ou=groups,dc=example,dc=com"
+
+instance_group: "default"
+
+cac_repo_url: "https://forgejo.smalick.com/aap-cac-demo/aap-team-delta-shared-config.git"
+
+...

@@ -1,0 +1,11 @@
+---
+# Organization-wide namespace for all custom collections.
+#
+# This value MUST match hub_custom_collection_namespace in
+# aap-platform-config/config/{env}/_commons.yml across all environments.
+# Changing it here requires updating _commons.yml and re-running
+# apply_config.yml to update the Hub namespace.
+#
+# The Jenkinsfile validates that every collection's galaxy.yml uses
+# this namespace. PRs with a mismatched namespace will fail CI.
+namespace: hig

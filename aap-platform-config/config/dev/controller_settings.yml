@@ -1,0 +1,6 @@
+---
+# Dev-only: disable Galaxy SSL verification for project sync.
+# The dev CRC instance uses a self-signed certificate.
+controller_settings_dev:
+  - name: GALAXY_IGNORE_CERTS
+    value: true

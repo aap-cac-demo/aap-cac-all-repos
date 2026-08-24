@@ -1,0 +1,161 @@
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'ACTION',
+            choices: ['apply_config', 'team_onboarding', 'team_offboarding', 'sync_hub_collections'],
+            description: 'Which playbook to run'
+        )
+        choice(
+            name: 'TARGET_ENV',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target AAP environment'
+        )
+        string(
+            name: 'EXTRA_VARS',
+            defaultValue: '',
+            description: 'Extra variables to pass (JSON format)'
+        )
+    }
+
+    environment {
+        ANSIBLE_FORCE_COLOR = 'true'
+        ANSIBLE_CONFIG      = 'ansible.cfg'
+    }
+
+    stages {
+        stage('Install Collections') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aap-hub-credentials',
+                        usernameVariable: 'ANSIBLE_GALAXY_SERVER_AUTOMATION_HUB_USERNAME',
+                        passwordVariable: 'ANSIBLE_GALAXY_SERVER_AUTOMATION_HUB_PASSWORD'
+                    )
+                ]) {
+                    sh 'ansible-galaxy collection install -r collections/requirements.yml --force'
+                }
+            }
+        }
+
+        stage('Lint') {
+            steps {
+                sh 'ansible-lint playbooks/'
+            }
+        }
+
+        stage('Dry Run') {
+            steps {
+                withCredentials([string(credentialsId: 'aap-vault-password', variable: 'VAULT_PASS')]) {
+                    script {
+                        def extraVarsArg = params.EXTRA_VARS ? "-e '${params.EXTRA_VARS}'" : ''
+                        sh """
+                            echo "\${VAULT_PASS}" > .vault_pass.txt
+                            ansible-playbook \
+                                -i inventory/inventory_${params.TARGET_ENV}.yml \
+                                -l ${params.TARGET_ENV} \
+                                playbooks/${params.ACTION}.yml \
+                                --vault-password-file .vault_pass.txt \
+                                --check --diff \
+                                ${extraVarsArg}
+                            rm -f .vault_pass.txt
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Apply to DEV') {
+            when {
+                allOf {
+                    branch 'main'
+                    expression { params.TARGET_ENV == 'dev' }
+                }
+            }
+            steps {
+                withCredentials([string(credentialsId: 'aap-vault-password', variable: 'VAULT_PASS')]) {
+                    script {
+                        def extraVarsArg = params.EXTRA_VARS ? "-e '${params.EXTRA_VARS}'" : ''
+                        sh """
+                            echo "\${VAULT_PASS}" > .vault_pass.txt
+                            ansible-playbook \
+                                -i inventory/inventory_dev.yml \
+                                -l dev \
+                                playbooks/${params.ACTION}.yml \
+                                --vault-password-file .vault_pass.txt \
+                                ${extraVarsArg}
+                            rm -f .vault_pass.txt
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Apply to STAGING') {
+            when {
+                allOf {
+                    branch 'main'
+                    expression { params.TARGET_ENV == 'staging' }
+                }
+            }
+            steps {
+                input message: 'Deploy to STAGING?', ok: 'Proceed'
+                withCredentials([string(credentialsId: 'aap-vault-password', variable: 'VAULT_PASS')]) {
+                    script {
+                        def extraVarsArg = params.EXTRA_VARS ? "-e '${params.EXTRA_VARS}'" : ''
+                        sh """
+                            echo "\${VAULT_PASS}" > .vault_pass.txt
+                            ansible-playbook \
+                                -i inventory/inventory_staging.yml \
+                                -l staging \
+                                playbooks/${params.ACTION}.yml \
+                                --vault-password-file .vault_pass.txt \
+                                ${extraVarsArg}
+                            rm -f .vault_pass.txt
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Apply to PROD') {
+            when {
+                allOf {
+                    branch 'main'
+                    expression { params.TARGET_ENV == 'prod' }
+                }
+            }
+            steps {
+                input message: 'Deploy to PRODUCTION? This requires approval.', ok: 'Approve and Deploy'
+                withCredentials([string(credentialsId: 'aap-vault-password', variable: 'VAULT_PASS')]) {
+                    script {
+                        def extraVarsArg = params.EXTRA_VARS ? "-e '${params.EXTRA_VARS}'" : ''
+                        sh """
+                            echo "\${VAULT_PASS}" > .vault_pass.txt
+                            ansible-playbook \
+                                -i inventory/inventory_prod.yml \
+                                -l prod \
+                                playbooks/${params.ACTION}.yml \
+                                --vault-password-file .vault_pass.txt \
+                                ${extraVarsArg}
+                            rm -f .vault_pass.txt
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'rm -f .vault_pass.txt'
+        }
+        failure {
+            echo 'Pipeline failed. Check the logs above for details.'
+        }
+        success {
+            echo "Successfully applied ${params.ACTION} to ${params.TARGET_ENV}"
+        }
+    }
+}

@@ -1,0 +1,6 @@
+# ansible-builder generates a context/ directory during image builds
+**/context/
+
+# Container runtime artifacts
+*.tar
+*.tar.gz

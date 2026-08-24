@@ -1,0 +1,2 @@
+python3-devel [platform:centos-9 platform:rhel-9]
+gcc [platform:centos-9 platform:rhel-9]

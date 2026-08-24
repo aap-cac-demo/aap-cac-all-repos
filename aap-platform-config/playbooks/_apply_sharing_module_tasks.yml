@@ -1,0 +1,90 @@
+---
+# Included by apply_sharing.yml for each sharing definition.
+# Uses ansible.platform.role_team_assignment to create cross-org grants.
+#
+# WARNING: Cross-org assignments cause a 500 Internal Server Error on
+# aap-operator.v2.7.0-0.1785438991. The module fails to resolve resource names
+# across org boundaries and sends the resource NAME as object_id (expects int).
+# Server traceback: ValueError: invalid literal for int() with base 10: '<name>'
+# USE apply_sharing_api.yml FOR CROSS-ORG SHARING INSTEAD.
+#
+# The ansible.platform.role_team_assignment module resolves resource names internally.
+# Known limitation: cross-org name resolution may fail if resource names collide across orgs.
+# If this occurs, use the API-based playbook (apply_sharing_api.yml) which explicitly
+# scopes the lookup to owner_org via /api/controller/v2/?organization=<id>.
+#
+# Supported assignment_objects types: organizations, job_templates, workflows
+# (mapped to workflow_job_templates), credentials, inventories, projects.
+#
+# Expects sharing_var_name to be set (e.g., "sharing_team_bravo_from_team_alpha").
+
+- name: "Set sharing facts for {{ sharing_var_name }}"
+  ansible.builtin.set_fact:
+    _sharing: "{{ lookup('vars', sharing_var_name) }}"
+
+- name: "Validate required fields: {{ _sharing.sharing_name }}"
+  ansible.builtin.assert:
+    that:
+      - _sharing.sharing_name is defined
+      - _sharing.owner_org is defined
+      - _sharing.consumer_team is defined
+      - _sharing.grants is defined
+      - _sharing.grants | length > 0
+      - _sharing.state is defined
+      - _sharing.state in ['present', 'absent']
+    fail_msg: >-
+      Sharing definition '{{ sharing_var_name }}' is missing required fields.
+      Required: sharing_name, owner_org, consumer_team, grants[], state.
+
+- name: "Verify consumer team exists: {{ _sharing.consumer_team }}"
+  ansible.platform.team:
+    name: "{{ _sharing.consumer_team }}"
+    state: exists
+  register: _consumer_team_check
+  failed_when: false
+
+- name: "Fail if consumer team does not exist"
+  ansible.builtin.fail:
+    msg: >-
+      Consumer team '{{ _sharing.consumer_team }}' does not exist in AAP.
+      The team must be created (via team onboarding) before sharing can be applied.
+  when: _consumer_team_check is failed
+
+- name: "Verify owner organization exists: {{ _sharing.owner_org }}"
+  ansible.platform.organization:
+    name: "{{ _sharing.owner_org }}"
+    state: exists
+  register: _owner_org_check
+  failed_when: false
+
+- name: "Fail if owner organization does not exist"
+  ansible.builtin.fail:
+    msg: >-
+      Owner organization '{{ _sharing.owner_org }}' does not exist in AAP.
+      The organization must be onboarded before sharing can be applied.
+  when: _owner_org_check is failed
+
+# Map the sharing definition resource_type to the module's assignment_objects type.
+# The module uses 'workflow_job_templates' internally for workflows.
+- name: "Map resource types for module"
+  ansible.builtin.set_fact:
+    _type_map:
+      job_templates: "job_templates"
+      workflows: "workflow_job_templates"
+      credentials: "credentials"
+      inventories: "inventories"
+      projects: "projects"
+      organizations: "organizations"
+
+- name: "Apply resource grants for {{ _sharing.sharing_name }}"
+  ansible.platform.role_team_assignment:
+    team: "{{ _sharing.consumer_team }}"
+    role_definition: "{{ item.role_definition }}"
+    assignment_objects:
+      - name: "{{ item.resource_name }}"
+        type: "{{ _type_map[item.resource_type] }}"
+    state: "{{ _sharing.state }}"
+  loop: "{{ _sharing.grants }}"
+  loop_control:
+    label: "{{ _sharing.consumer_team }} -> {{ item.role_definition }} on {{ item.resource_type }}/{{ item.resource_name }}"
+...

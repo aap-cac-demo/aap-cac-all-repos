@@ -1,0 +1,63 @@
+---
+# Hub remote upsert and collection sync.
+# Included by apply_config.yml (after dispatch) and sync_hub_collections.yml.
+#
+# This task file is DATA-DRIVEN: it reads remote definitions from
+# hub_collection_remote_all (config/all/hub_collection_remote.yml).
+# Do NOT hardcode collection names or remote names here.
+#
+# Requires: aap_hostname, aap_username, aap_password, aap_validate_certs,
+#           hub_collection_remote_all
+#
+# Optional: hub_sync_remotes -- list of remote names to sync (default: all
+#           remotes with sync: true and a non-empty requirements list).
+
+- name: Upsert Hub collection remotes
+  ansible.hub.collection_remote:
+    name: "{{ item.name }}"
+    url: "{{ item.url }}"
+    auth_url: "{{ item.auth_url | default(omit) }}"
+    token: "{{ item.token | default(omit) }}"
+    requirements: "{{ item.requirements | default(omit) }}"
+    sync_dependencies: "{{ item.sync_dependencies | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+    ah_host: "{{ aap_hostname }}"
+    ah_username: "{{ aap_username }}"
+    ah_password: "{{ aap_password }}"
+    ah_path_prefix: "galaxy"
+    validate_certs: "{{ aap_validate_certs }}"
+  loop: "{{ hub_collection_remote_all }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Build the list of remotes eligible for sync:
+#   - must have sync: true
+#   - must have a non-empty requirements list
+#   - if hub_sync_remotes is set, further filter to that subset
+- name: Build sync-eligible remote list
+  ansible.builtin.set_fact:
+    _hub_remotes_to_sync: >-
+      {%- set _eligible = hub_collection_remote_all
+        | selectattr('sync', 'defined')
+        | selectattr('sync', 'equalto', true)
+        | selectattr('requirements', 'defined')
+        | rejectattr('requirements', 'equalto', [])
+        | list -%}
+      {% if hub_sync_remotes is defined -%}
+        {{ _eligible | selectattr('name', 'in', hub_sync_remotes) | list }}
+      {%- else -%}
+        {{ _eligible }}
+      {%- endif %}
+
+- name: Sync Hub collection repositories
+  ansible.hub.collection_repository_sync:
+    name: "{{ item.name }}"
+    wait: true
+    ah_host: "{{ aap_hostname }}"
+    ah_username: "{{ aap_username }}"
+    ah_password: "{{ aap_password }}"
+    ah_path_prefix: "galaxy"
+    validate_certs: "{{ aap_validate_certs }}"
+  loop: "{{ _hub_remotes_to_sync }}"
+  loop_control:
+    label: "Syncing {{ item.name }}"

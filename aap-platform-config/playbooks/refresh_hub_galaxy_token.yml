@@ -1,0 +1,22 @@
+---
+- name: Refresh Hub Galaxy token
+  hosts: all
+  connection: local
+  vars:
+    hub_galaxy_token_force_refresh: true
+  tasks:
+    - name: Include common vars
+      ansible.builtin.include_vars:
+        dir: ../config/all
+        extensions:
+          - 'yml'
+
+    - name: Include env vars
+      ansible.builtin.include_vars:
+        dir: "../config/{{ env }}"
+        extensions:
+          - 'yml'
+        ignore_files: "{{ (_cred_injected | default(false)) | ternary(['secrets.yml'], []) }}"
+
+    - name: Refresh Hub Galaxy token and credentials
+      ansible.builtin.include_tasks: _hub_galaxy_credential_tasks.yml

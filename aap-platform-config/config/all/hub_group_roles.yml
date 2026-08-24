@@ -1,0 +1,26 @@
+---
+# Hub RBAC -- group/team role assignments.
+#
+# Currently empty. The CI pipeline (aap-hub-collections) reuses the
+# platform admin credential (Jenkins 'aap-hub-credentials') for
+# publishing, so no dedicated Hub team or roles are needed.
+#
+# If least-privilege becomes a requirement, two options:
+#
+#   Option B (manual setup):
+#     Create svc-hub-publisher user and hub-publishers team manually
+#     in Hub UI. Assign the roles below. Store credentials in a
+#     separate Jenkins credential (aap-hub-publish-credentials).
+#
+#   Option C (full CaC automation):
+#     Automate user/team creation via ansible.platform.user and
+#     ansible.hub.group, with a rotation playbook mirroring the
+#     team CaC service account pattern. Note: the last mile (updating
+#     the Jenkins credential) remains manual regardless.
+#
+#   Least-privilege roles for either option:
+#     galaxy.collection_namespace_owner -- Upload to namespace
+#     galaxy.collection_curator -- Approve from staging to published
+#
+hub_group_roles_all: []
+...

@@ -1,0 +1,34 @@
+---
+- name: Apply team configuration
+  hosts: all
+  connection: local
+  tasks:
+    - name: Validate env is defined
+      ansible.builtin.assert:
+        that:
+          - env is defined
+          - env in ['dev', 'staging', 'prod']
+        fail_msg: >-
+          'env' must be set to one of: dev, staging, prod.
+          Via AAP JT: set automatically from extra_vars.
+          Via CLI: use -i inventory/inventory_<env>.yml
+
+    - name: Include common vars
+      ansible.builtin.include_vars:
+        dir: ../config/all
+        extensions:
+          - 'yml'
+
+    - name: Include env vars
+      ansible.builtin.include_vars:
+        dir: "../config/{{ env }}"
+        extensions:
+          - 'yml'
+        ignore_files: "{{ (_cred_injected | default(false)) | ternary(['secrets.yml'], []) }}"
+
+    - name: Apply configuration via dispatch
+      ansible.builtin.include_role:
+        name: infra.aap_configuration.dispatch
+      vars:
+        dispatch_include_wildcard_vars: true
+...

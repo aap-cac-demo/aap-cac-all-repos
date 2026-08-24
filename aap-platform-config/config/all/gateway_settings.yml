@@ -1,0 +1,5 @@
+---
+# Platform-wide gateway settings (processed by dispatch)
+gateway_settings_all:
+  gateway_access_token_expiration: "{{ hub_galaxy_token_expire_seconds }}"
+...

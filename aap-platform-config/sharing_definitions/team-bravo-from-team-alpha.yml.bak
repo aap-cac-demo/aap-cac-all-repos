@@ -1,0 +1,72 @@
+---
+# Cross-org sharing definition: Team-Bravo consuming resources from Team-Alpha.
+# Processed by: playbooks/apply_sharing.yml (module-based)
+#            or playbooks/apply_sharing_api.yml (API-based fallback)
+#
+# Requires platform team approval via PR.
+#
+# Allowed resource_type values:
+#   - job_templates       (controller resource)
+#   - workflows           (controller resource: workflow_job_templates)
+#   - credentials         (controller resource)
+#   - inventories         (controller resource)
+#   - projects            (controller resource)
+#   - organizations       (gateway resource -- grants org-wide access)
+#
+# Allowed role_definition values (resource-level):
+#   - JobTemplate Execute           (execute a specific JT)
+#   - JobTemplate Admin             (full admin on a specific JT)
+#   - WorkflowJobTemplate Execute   (execute a specific workflow)
+#   - WorkflowJobTemplate Admin     (full admin on a specific workflow)
+#   - WorkflowJobTemplate Approve   (approve workflow steps)
+#   - Credential Use                (use a specific credential)
+#   - Credential Admin              (full admin on a specific credential)
+#   - Inventory Use                 (use a specific inventory)
+#   - Inventory Admin               (full admin on a specific inventory)
+#   - Inventory Adhoc               (run ad-hoc commands against inventory)
+#   - Inventory Update              (update inventory sources)
+#   - Project Use                   (use a specific project)
+#   - Project Admin                 (full admin on a specific project)
+#   - Project Update                (update/sync a specific project)
+#
+# Allowed role_definition values (org-level, when resource_type: organizations):
+#   WARNING: Org-level roles grant access to ALL current AND future resources
+#   of the granted type. Use resource-level roles for fine-grained control.
+#   - Organization Execute          (execute all JTs/workflows in org)
+#   - Organization Audit            (read-only on everything in org)
+#   - Organization Inventory Admin  (manage all inventories in org)
+#   - Organization Credential Admin (manage all credentials in org)
+#   - Organization Project Admin    (manage all projects in org)
+#   - Organization JobTemplate Admin (manage all JTs in org)
+#   - Organization WorkflowJobTemplate Admin (manage all workflows in org)
+#   - Organization ExecutionEnvironment Admin (manage all EEs in org)
+#   - Organization Approval         (approve workflow steps in org)
+#
+# Custom role_definition values (requires platform to create them first via
+# config/all/gateway_role_definitions.yml -- see examples there):
+#   - JobTemplate View              (view a specific JT, no execute)
+#   - WorkflowJobTemplate View      (view a specific workflow, no execute)
+#   - Credential View               (view credential metadata, no use)
+#   - Inventory View                (view a specific inventory, no use)
+#   - Project View                  (view a specific project, no use)
+#
+# NOT allowed (API restriction -- cannot be assigned to teams):
+#   - Organization Admin
+#   - Organization Member
+#
+# Allowed state values:
+#   - present   (create the grants)
+#   - absent    (revoke the grants)
+
+sharing_name: "team-bravo-from-team-alpha"
+owner_org: "Team-Alpha"
+consumer_team: "team-bravo-operators"
+grants:
+  - resource_name: "deploy-shared-infra"
+    resource_type: job_templates
+    role_definition: "JobTemplate Execute"
+  - resource_name: "shared-deploy-credential"
+    resource_type: credentials
+    role_definition: "Credential Use"
+state: present
+...

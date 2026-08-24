@@ -1,0 +1,135 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(
+            name: 'EE_FILTER',
+            defaultValue: '',
+            description: 'Build only this EE (e.g. global/ee-custom-base). Leave blank to auto-detect changed EEs.'
+        )
+    }
+
+    environment {
+        REGISTRY = 'hub.example.com'
+        BUILDER_IMAGE = 'registry.redhat.io/ansible-automation-platform-27/ansible-builder-rhel9:latest'
+    }
+
+    stages {
+        stage('Detect Changed EEs') {
+            steps {
+                script {
+                    if (params.EE_FILTER) {
+                        env.CHANGED_EES = params.EE_FILTER
+                    } else {
+                        def changes = sh(
+                            script: '''
+                                git diff --name-only HEAD~1 HEAD \
+                                  | grep -E '^(global|teams)/' \
+                                  | sed 's|/[^/]*$||' \
+                                  | sort -u \
+                                  | while read dir; do
+                                      if [ -f "${dir}/execution-environment.yml" ]; then
+                                        echo "${dir}"
+                                      fi
+                                    done
+                            ''',
+                            returnStdout: true
+                        ).trim()
+                        env.CHANGED_EES = changes ?: ''
+                    }
+
+                    if (!env.CHANGED_EES) {
+                        echo 'No EE changes detected. Skipping build.'
+                        currentBuild.result = 'NOT_BUILT'
+                    } else {
+                        echo "EEs to build:\n${env.CHANGED_EES}"
+                    }
+                }
+            }
+        }
+
+        stage('Lint EE Definitions') {
+            when {
+                expression { env.CHANGED_EES }
+            }
+            steps {
+                script {
+                    env.CHANGED_EES.split('\n').each { eePath ->
+                        sh "yamllint -d relaxed ${eePath}/execution-environment.yml"
+                    }
+                }
+            }
+        }
+
+        stage('Build EE Images') {
+            when {
+                expression { env.CHANGED_EES }
+            }
+            steps {
+                script {
+                    env.CHANGED_EES.split('\n').each { eePath ->
+                        def eeName = eePath.split('/').last()
+                        def tag = env.BRANCH_NAME == 'main' ? 'latest' : "pr-${env.BUILD_NUMBER}"
+                        def imageTag = "${env.REGISTRY}/${eeName}:${tag}"
+
+                        echo "Building ${eeName} from ${eePath}"
+                        sh """
+                            ansible-builder build \
+                                --file ${eePath}/execution-environment.yml \
+                                --context ${eePath}/context \
+                                --tag ${imageTag} \
+                                --container-runtime podman \
+                                --verbosity 2
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Push EE Images') {
+            when {
+                allOf {
+                    branch 'main'
+                    expression { env.CHANGED_EES }
+                }
+            }
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'ee-registry-credentials',
+                    usernameVariable: 'REGISTRY_USER',
+                    passwordVariable: 'REGISTRY_PASS'
+                )]) {
+                    script {
+                        sh "podman login ${env.REGISTRY} -u \${REGISTRY_USER} -p \${REGISTRY_PASS}"
+
+                        env.CHANGED_EES.split('\n').each { eePath ->
+                            def eeName = eePath.split('/').last()
+                            def imageLatest = "${env.REGISTRY}/${eeName}:latest"
+                            def imageVersion = "${env.REGISTRY}/${eeName}:${env.BUILD_NUMBER}"
+
+                            sh "podman tag ${imageLatest} ${imageVersion}"
+                            sh "podman push ${imageLatest}"
+                            sh "podman push ${imageVersion}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'podman system prune -f || true'
+        }
+        failure {
+            echo 'EE build pipeline failed. Check the logs above for details.'
+        }
+        success {
+            script {
+                if (env.CHANGED_EES) {
+                    echo "Successfully processed EEs:\n${env.CHANGED_EES}"
+                }
+            }
+        }
+    }
+}

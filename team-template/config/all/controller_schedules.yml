@@ -1,0 +1,10 @@
+---
+# Team schedules -- define recurring automation here.
+controller_schedules_all: []
+  # Example:
+  # - name: "Nightly Deploy"
+  #   unified_job_template: "Deploy Application"
+  #   rrule: "DTSTART:20260101T000000Z RRULE:FREQ=DAILY;INTERVAL=1"
+  #   enabled: true
+  #   state: present
+...

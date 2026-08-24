@@ -1,0 +1,11 @@
+---
+# Team inventories -- define your automation target inventories here.
+# Use the _all suffix for resources applied to all environments.
+# Organization name is set during onboarding by the platform team.
+controller_inventories_all: []
+  # Example:
+  # - name: "app-servers"
+  #   organization: "Team-Alpha"
+  #   description: "Application servers inventory"
+  #   state: present
+...
