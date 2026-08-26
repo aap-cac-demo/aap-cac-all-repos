@@ -17,6 +17,9 @@
 
     - name: Set up Hub Galaxy credential
       ansible.builtin.include_tasks: _hub_galaxy_credential_tasks.yml
+      
+    - name: Set up Hub remotes and sync collections
+      ansible.builtin.include_tasks: _hub_sync_tasks.yml
 
     - name: Apply configuration via dispatch
       ansible.builtin.include_role:
@@ -24,6 +27,4 @@
       vars:
         dispatch_include_wildcard_vars: true
 
-    - name: Set up Hub remotes and sync collections
-      ansible.builtin.include_tasks: _hub_sync_tasks.yml
 ...
