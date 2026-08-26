@@ -1,0 +1,10 @@
+---
+# Copy this file to sharing_definitions/<sharing-name>.yml and fill every token.
+# Files ending in .template are not loaded by the sharing playbooks.
+
+sharing_name: "<SHARING_NAME>"
+owner_org: "<OWNER_ORGANIZATION_NAME>"
+consumer_team: "<CONSUMER_TEAM_NAME>"
+grants: []
+state: present
+...

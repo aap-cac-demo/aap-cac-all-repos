@@ -1,0 +1,24 @@
+---
+# Copy this file to team_definitions/<team-name>.yml and fill every token.
+# Files ending in .template are not loaded by team_onboarding.yml.
+
+team_name: "<TEAM_NAME>"
+org_display_name: "<ORGANIZATION_DISPLAY_NAME>"
+description: "<TEAM_DESCRIPTION>"
+
+ldap_groups:
+  admins: "<TEAM_ADMINS_GROUP_DN>"
+  operators: "<TEAM_OPERATORS_GROUP_DN>"
+
+# Optional sub-teams. Leave empty when no sub-teams are required.
+custom_teams: []
+
+instance_group: "<INSTANCE_GROUP_NAME>"
+
+cac_repo_url: "<TEAM_CAC_REPOSITORY_URL>"
+
+environments:
+  - dev
+  - staging
+  - prod
+...

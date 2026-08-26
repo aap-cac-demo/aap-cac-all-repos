@@ -29,6 +29,12 @@
   loop: "{{ hub_collection_remote_all }}"
   loop_control:
     label: "{{ item.name }}"
+    
+- name: Upsert Hub collection repositories
+  ansible.builtin.include_role:
+    name: infra.aap_configuration.hub_collection_repository
+  vars:
+    hub_collection_repositories: "{{ hub_collection_repository_all }}"
 
 # Build the list of remotes eligible for sync:
 #   - must have sync: true
