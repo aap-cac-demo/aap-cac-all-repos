@@ -34,7 +34,7 @@
   ansible.builtin.include_role:
     name: infra.aap_configuration.hub_collection_repository
   vars:
-    hub_collection_repositories: "{{ hub_collection_repository_all }}"
+    hub_collection_repositories: "{{ (hub_collection_repositories_all | default([])) + (lookup('ansible.builtin.vars', 'hub_collection_repositories_' ~ env, default=[])) }}"
 
 # Build the list of remotes eligible for sync:
 #   - must have sync: true
