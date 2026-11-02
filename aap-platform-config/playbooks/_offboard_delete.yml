@@ -1,0 +1,22 @@
+---
+# Delete one discovered object by its exact URL, then wait for removal.
+# Checking the detail URL avoids content-type collisions between numeric IDs.
+# Called only from the main playbook's delete-mode block.
+- name: "Delete object: {{ _offboard_object.url }}"
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}{{ _offboard_object.url }}"
+    method: DELETE
+    status_code: [202, 204, 404]
+  register: _offboard_delete
+  changed_when: _offboard_delete.status in [202, 204]
+
+- name: "Wait for object removal: {{ _offboard_object.url }}"
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}{{ _offboard_object.url }}"
+    method: GET
+    status_code: [200, 202, 404]
+  register: _offboard_removed
+  until: _offboard_removed.status == 404
+  retries: "{{ offboard_delete_retries | default(30) }}"
+  delay: "{{ offboard_delete_delay | default(2) }}"
+  when: _offboard_delete.status != 404

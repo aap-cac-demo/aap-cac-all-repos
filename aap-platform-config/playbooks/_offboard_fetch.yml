@@ -1,0 +1,65 @@
+---
+# Fetch one complete collection into _offboard_fetched[_fetch_key].
+# Callers supply _fetch_label, _fetch_key, and _fetch_url.
+# Recursive calls preserve accumulated pages; only the first call resets and finalizes.
+
+- name: "Reset fetch state for {{ _fetch_label }}"
+  ansible.builtin.set_fact:
+    _fetch_results: []
+    _fetch_pages: 0
+    _fetch_count: 0
+    _fetch_next_url: "{{ _fetch_url }}{{ '&' if '?' in _fetch_url else '?' }}page_size={{ offboard_page_size | default(200) }}"
+  when: _fetch_first_page | default(true)
+
+- name: "Guard against runaway pagination"
+  ansible.builtin.assert:
+    that:
+      - _fetch_pages | int < (offboard_max_pages | default(1000) | int)
+    fail_msg: "Exceeded max page guard while fetching {{ _fetch_label }}."
+
+- name: "Fetch page"
+  ansible.builtin.uri:
+    url: >-
+      {{ _fetch_next_url if _fetch_next_url is match('^https?://')
+         else aap_hostname ~ _fetch_next_url }}
+    method: GET
+    status_code: 200
+  register: _fetch_response
+  retries: 3
+  delay: 2
+  until: _fetch_response.status == 200
+
+- name: "Record total count"
+  ansible.builtin.set_fact:
+    _fetch_count: "{{ _fetch_response.json.count }}"
+  when: _fetch_pages | int == 0
+
+- name: "Accumulate results"
+  ansible.builtin.set_fact:
+    _fetch_results: >-
+      {{ ((_fetch_results | default([])) + _fetch_response.json.results)
+         | unique(attribute='id') }}
+    _fetch_pages: "{{ _fetch_pages | int + 1 }}"
+    _fetch_next_url: "{{ _fetch_response.json.next | default('', true) }}"
+
+- name: "Fetch next page"
+  ansible.builtin.include_tasks: _offboard_fetch.yml
+  vars:
+    _fetch_first_page: false
+  when: _fetch_next_url | length > 0
+
+- name: "Verify discovery is complete"
+  ansible.builtin.assert:
+    that:
+      - (_fetch_results | length) == (_fetch_count | int)
+    fail_msg: >-
+      Truncated {{ _fetch_label }} discovery:
+      got {{ _fetch_results | length }}, expected {{ _fetch_count }}.
+  when: _fetch_first_page | default(true)
+
+- name: "Store discovery results"
+  ansible.builtin.set_fact:
+    _offboard_fetched: >-
+      {{ (_offboard_fetched | default({}))
+         | combine({(_fetch_key | default(_fetch_label)): _fetch_results}) }}
+  when: _fetch_first_page | default(true)

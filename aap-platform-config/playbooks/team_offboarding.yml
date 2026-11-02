@@ -1,112 +1,336 @@
 ---
-- name: Offboard a team from AAP
+- name: Offboard an organization from AAP
   hosts: all
   connection: local
-  vars_files:
-    - ../config/{{ env }}/secrets.yml
+  gather_facts: false
   vars:
-    team_name: ""
+    offboard_mode: plan
+    offboard_allow_missing_org: false
+    # Insertion order is the deletion order; keep dependents before dependencies.
+    _offboard_resource_types:
+      workflow_job_templates: awx.workflowjobtemplate
+      job_templates: awx.jobtemplate
+      projects: awx.project
+      inventories: awx.inventory
+      credentials: awx.credential
+      notification_templates: awx.notificationtemplate
+      execution_environments: awx.executionenvironment
   module_defaults:
-    group/ansible.platform.gateway:
-      aap_hostname: "{{ aap_hostname }}"
-      aap_username: "{{ aap_username }}"
-      aap_password: "{{ aap_password }}"
-      aap_validate_certs: "{{ aap_validate_certs }}"
+    ansible.builtin.uri:
+      user: "{{ aap_username }}"
+      password: "{{ aap_password }}"
+      force_basic_auth: true
+      validate_certs: "{{ aap_validate_certs }}"
   tasks:
+    # 1. Validate the target.
     - name: Include env secrets
       ansible.builtin.include_vars:
         dir: "../config/{{ env }}"
         extensions:
           - 'yml'
+      when: not (_cred_injected | default(false) | bool)
 
-    - name: Validate team_name is provided
+    - name: Validate offboarding target
       ansible.builtin.assert:
         that:
-          - team_name | length > 0
-        fail_msg: "team_name must be provided as extra var (e.g., -e team_name=team-bravo)"
+          - org_display_name | default('') | length > 0
+          - org_display_name != 'Default'
+          - offboard_mode in ['plan', 'delete']
+        fail_msg: >-
+          Provide -e org_display_name=<org>. Default is protected.
+          Use -e offboard_mode=plan (default) to preview, or
+          -e offboard_mode=delete to apply.
 
-    - name: "Load team definition: team_definitions/{{ team_name }}.yml"
-      ansible.builtin.include_vars:
-        file: "../team_definitions/{{ team_name }}.yml"
-        name: _offboard_team
+    - name: Initialize onboarding identity lookup
+      ansible.builtin.set_fact:
+        _offboard_definitions: []
 
-    - name: Validate team definition fields
+    - name: Find the onboarding definition for this organization
+      ansible.builtin.set_fact:
+        _offboard_definitions: "{{ _offboard_definitions + [_definition] }}"
+      vars:
+        _definition: "{{ lookup('ansible.builtin.file', item) | from_yaml }}"
+      loop: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../team_definitions/*.yml') }}"
+      when: _definition.org_display_name | default('') == org_display_name
+      loop_control:
+        label: "{{ item | basename }}"
+
+    - name: Require an unambiguous onboarding identity
       ansible.builtin.assert:
         that:
-          - _offboard_team.team_name is defined
-          - _offboard_team.org_display_name is defined
-        fail_msg: "Team definition missing required fields (team_name, org_display_name)"
+          - _offboard_definitions | length <= 1
+        fail_msg: "Multiple onboarding definitions match this organization; refusing to choose one."
 
-    # --- Check for stale sharing definitions ---
+    - name: Resolve the dedicated account prefix
+      ansible.builtin.set_fact:
+        _offboard_account_prefix: "{{ (_offboard_definitions | first | default({})).team_name | default('') }}"
 
-    - name: "Check for sharing definitions referencing {{ _offboard_team.team_name }}"
+    - name: Report an organization without an onboarding definition
+      ansible.builtin.debug:
+        msg: >-
+          No onboarding definition matches this organization. Organization-owned
+          resources will be offboarded; dedicated accounts and Platform credentials
+          cannot be identified safely and will be preserved.
+      when: _offboard_account_prefix | length == 0
+
+    - name: "Check for sharing definitions referencing the offboarded organization"
       ansible.builtin.find:
         paths: "{{ playbook_dir }}/../sharing_definitions"
-        patterns: "*{{ _offboard_team.team_name }}*"
+        patterns: "*{{ _offboard_account_prefix if _offboard_account_prefix | length > 0 else org_display_name }}*"
         file_type: file
       register: _stale_sharing_files
 
     - name: "WARNING: Stale sharing definitions found"
       ansible.builtin.debug:
         msg: >-
-          The following sharing definitions reference the offboarded team and should be
+          The following sharing definitions reference the offboarded organization and should be
           removed via PR: {{ _stale_sharing_files.files | map(attribute='path') | map('basename') | list | join(', ') }}
       when: _stale_sharing_files.matched > 0
 
-    # --- Remove custom sub-team authenticator maps (global, not cascade-deleted) ---
+    # 2. Discover owned assets, grants, and dedicated objects.
+    - name: "Resolve organization: {{ org_display_name }}"
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/gateway/v1/organizations/?name={{ org_display_name | urlencode }}"
+        method: GET
+        status_code: 200
+      register: _offboard_org_lookup
 
-    - name: "Remove custom sub-team authenticator maps"
-      ansible.platform.authenticator_map:
-        name: "{{ item.name }}-map"
-        authenticator: corporate-ldap
-        map_type: team
-        state: absent
-      loop: "{{ (_offboard_team.custom_teams | default([])) }}"
+    - name: "Report already-absent organization"
+      ansible.builtin.debug:
+        msg: "Organization '{{ org_display_name }}' does not exist; nothing to do."
+      when:
+        - _offboard_org_lookup.json.count == 0
+        - offboard_allow_missing_org | default(false) | bool
+
+    - name: "Stop when organization is already absent"
+      ansible.builtin.meta: end_play
+      when:
+        - _offboard_org_lookup.json.count == 0
+        - offboard_allow_missing_org | default(false) | bool
+
+    - name: "Require exactly one matching organization"
+      ansible.builtin.assert:
+        that:
+          - _offboard_org_lookup.json.count == 1
+        fail_msg: >-
+          Expected exactly one organization named '{{ org_display_name }}',
+          found {{ _offboard_org_lookup.json.count }}.
+
+    - name: "Initialize offboarding facts"
+      ansible.builtin.set_fact:
+        _offboard_org_id: "{{ _offboard_org_lookup.json.results[0].id }}"
+        _offboard_fetched: {}
+        _offboard_owned: {}
+        _offboard_team_assignments: []
+        _offboard_user_assignments: []
+        _offboard_auth_maps: []
+
+    - name: "Discover org-scoped controller resources"
+      ansible.builtin.include_tasks: _offboard_fetch.yml
+      vars:
+        _fetch_label: "{{ item }}"
+        _fetch_key: "{{ item }}"
+        _fetch_url: >-
+          {{ aap_hostname }}/api/controller/v2/{{ item }}/?organization={{ _offboard_org_id }}
+      loop: "{{ _offboard_resource_types | list }}"
       loop_control:
-        label: "{{ item.name }}-map"
+        label: "{{ item }}"
 
-    # --- Remove authenticator maps (global, not cascade-deleted) ---
+    - name: "Build owned resource map"
+      ansible.builtin.set_fact:
+        # Snapshot only the controller assets, before fetching teams and grants.
+        _offboard_owned: "{{ _offboard_fetched }}"
 
-    - name: "Remove authenticator map for admins (org admin)"
-      ansible.platform.authenticator_map:
-        name: "{{ _offboard_team.team_name }}-admins-map"
-        authenticator: corporate-ldap
-        map_type: organization
-        state: absent
+    - name: "Verify every delete candidate is owned by {{ org_display_name }}"
+      ansible.builtin.assert:
+        that:
+          - item.summary_fields.organization.id | int == _offboard_org_id | int
+        fail_msg: >-
+          Ownership check failed for {{ item.name | default(item.id) }}
+          ({{ item.type | default('resource') }}).
+      loop: "{{ _offboard_owned | dict2items | map(attribute='value') | flatten }}"
+      loop_control:
+        label: "{{ item.name | default(item.id) }}"
 
-    - name: "Remove LDAP authenticator map for operators"
-      ansible.platform.authenticator_map:
-        name: "{{ _offboard_team.team_name }}-operators-map"
-        authenticator: corporate-ldap
-        map_type: team
-        state: absent
+    - name: "Discover teams in {{ org_display_name }}"
+      ansible.builtin.include_tasks: _offboard_fetch.yml
+      vars:
+        _fetch_label: teams
+        _fetch_key: teams
+        _fetch_url: >-
+          {{ aap_hostname }}/api/gateway/v1/teams/?organization={{ _offboard_org_id }}
 
-    # --- Remove credentials in Platform org (not cascade-deleted with team org) ---
+    - name: "Verify every discovered team is owned by {{ org_display_name }}"
+      ansible.builtin.assert:
+        that:
+          - item.organization | int == _offboard_org_id | int
+        fail_msg: "Ownership check failed for team {{ item.name }}."
+      loop: "{{ _offboard_fetched.teams | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
 
-    - name: "Remove gateway credential: {{ _offboard_team.team_name }}-gateway-cred"
-      ansible.controller.credential:
-        name: "{{ _offboard_team.team_name }}-gateway-cred"
-        organization: Platform
-        credential_type: "AAP CaC Credential"
-        state: absent
-        controller_host: "{{ aap_hostname }}"
-        controller_username: "{{ aap_username }}"
-        controller_password: "{{ aap_password }}"
-        validate_certs: "{{ aap_validate_certs }}"
+    - name: "Set team lookup facts"
+      ansible.builtin.set_fact:
+        _offboard_teams: "{{ _offboard_fetched.teams | default([]) }}"
+        _offboard_team_ids: "{{ _offboard_fetched.teams | default([]) | map(attribute='id') | map('string') | list }}"
+        _offboard_team_names: "{{ _offboard_fetched.teams | default([]) | map(attribute='name') | list }}"
 
-    # Vault credential (in team org) is cascade-deleted with the organization.
+    - name: "Build organization and team keys for role assignment matching"
+      ansible.builtin.set_fact:
+        _offboard_owned_keys: >-
+          {{ ['shared.organization:' ~ (_offboard_org_id | string)]
+             + (_offboard_team_ids | map('regex_replace', '^', 'shared.team:') | list) }}
 
-    # --- Remove service account (global, not cascade-deleted) ---
+    - name: "Add controller object keys for role assignment matching"
+      ansible.builtin.set_fact:
+        _offboard_owned_keys: >-
+          {{ _offboard_owned_keys
+             + (_offboard_owned[item.key] | map(attribute='id') | map('string')
+                | map('regex_replace', '^', item.value ~ ':') | list) }}
+      loop: "{{ _offboard_resource_types | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
 
-    - name: "Remove CaC service account: svc-{{ _offboard_team.team_name }}-cac"
-      ansible.platform.user:
-        username: "svc-{{ _offboard_team.team_name }}-cac"
-        state: absent
+    - name: "Discover role team assignments"
+      ansible.builtin.include_tasks: _offboard_fetch.yml
+      vars:
+        _fetch_label: role team assignments
+        _fetch_key: team_assignments
+        _fetch_url: >-
+          {{ aap_hostname }}/api/gateway/v1/role_team_assignments/
 
-    # --- Remove organization (cascades: teams, projects, JTs, inventories) ---
+    - name: "Discover role user assignments"
+      ansible.builtin.include_tasks: _offboard_fetch.yml
+      vars:
+        _fetch_label: role user assignments
+        _fetch_key: user_assignments
+        _fetch_url: >-
+          {{ aap_hostname }}/api/gateway/v1/role_user_assignments/
 
-    - name: "Remove organization: {{ _offboard_team.org_display_name }}"
-      ansible.platform.organization:
-        name: "{{ _offboard_team.org_display_name }}"
-        state: absent
+    - name: "Discover authenticator maps"
+      ansible.builtin.include_tasks: _offboard_fetch.yml
+      vars:
+        _fetch_label: authenticator maps
+        _fetch_key: auth_maps
+        _fetch_url: >-
+          {{ aap_hostname }}/api/gateway/v1/authenticator_maps/
+
+    - name: "Initialize dedicated object facts"
+      ansible.builtin.set_fact:
+        _offboard_svc_user: {}
+        _offboard_gateway_cred: {}
+
+    - name: "Resolve dedicated CaC service account"
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/gateway/v1/users/?username={{ ('svc-' ~ _offboard_account_prefix ~ '-cac') | urlencode }}"
+        method: GET
+        status_code: 200
+      register: _offboard_svc_lookup
+      when: _offboard_account_prefix | length > 0
+
+    - name: "Set dedicated CaC service account"
+      ansible.builtin.set_fact:
+        _offboard_svc_user: "{{ _offboard_svc_lookup.json.results[0] | default({}) }}"
+      when: _offboard_account_prefix | length > 0
+
+    - name: "Discover dedicated CaC gateway credentials in Platform"
+      ansible.builtin.include_tasks: _offboard_fetch.yml
+      vars:
+        _fetch_label: dedicated gateway credentials
+        _fetch_key: gateway_credentials
+        _fetch_url: >-
+          {{ aap_hostname }}/api/controller/v2/credentials/?name={{ (_offboard_account_prefix ~ '-gateway-cred') | urlencode }}&organization__name=Platform
+      when: _offboard_account_prefix | length > 0
+
+    - name: "Require an unambiguous dedicated gateway credential"
+      ansible.builtin.assert:
+        that:
+          - _offboard_fetched.gateway_credentials | default([]) | length <= 1
+        fail_msg: "Multiple Platform credentials match the dedicated name; refusing to choose one."
+
+    - name: "Verify dedicated gateway credential ownership"
+      ansible.builtin.assert:
+        that:
+          - item.summary_fields.organization.name == 'Platform'
+        fail_msg: "Dedicated gateway credential must belong to Platform."
+      loop: "{{ _offboard_fetched.gateway_credentials | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: "Set dedicated CaC gateway credential"
+      ansible.builtin.set_fact:
+        _offboard_gateway_cred: "{{ _offboard_fetched.gateway_credentials | default([]) | first | default({}) }}"
+
+    - name: "Select role team assignments to revoke"
+      ansible.builtin.set_fact:
+        _offboard_team_assignments: "{{ _offboard_team_assignments + [item] }}"
+      loop: "{{ _offboard_fetched.team_assignments | default([]) }}"
+      when: >-
+        (item.team | string) in _offboard_team_ids or
+        ((item.content_type | default('')) ~ ':' ~ (item.object_id | string)) in _offboard_owned_keys
+
+    - name: "Select role user assignments to revoke"
+      ansible.builtin.set_fact:
+        _offboard_user_assignments: "{{ _offboard_user_assignments + [item] }}"
+      loop: "{{ _offboard_fetched.user_assignments | default([]) }}"
+      when: >-
+        ((item.content_type | default('')) ~ ':' ~ (item.object_id | string)) in _offboard_owned_keys
+
+    - name: "Select authenticator maps for the offboarded org"
+      ansible.builtin.set_fact:
+        _offboard_auth_maps: "{{ _offboard_auth_maps + [item] }}"
+      loop: "{{ _offboard_fetched.auth_maps | default([]) }}"
+      # Team names are unique only within an organization. Never match by team name alone.
+      when: item.organization | default('', true) == org_display_name
+
+    - name: "Offboarding plan for {{ org_display_name }}"
+      ansible.builtin.debug:
+        msg:
+          - "Mode: {{ offboard_mode }}"
+          - "Organization ID: {{ _offboard_org_id }}"
+          - "Owned workflow job templates: {{ _offboard_owned.workflow_job_templates | map(attribute='name') | list }}"
+          - "Owned job templates: {{ _offboard_owned.job_templates | map(attribute='name') | list }}"
+          - "Owned projects: {{ _offboard_owned.projects | map(attribute='name') | list }}"
+          - "Owned inventories: {{ _offboard_owned.inventories | map(attribute='name') | list }}"
+          - "Owned credentials: {{ _offboard_owned.credentials | map(attribute='name') | list }}"
+          - "Owned notification templates: {{ _offboard_owned.notification_templates | map(attribute='name') | list }}"
+          - "Owned execution environments: {{ _offboard_owned.execution_environments | map(attribute='name') | list }}"
+          - "Teams: {{ _offboard_team_names }}"
+          - "Role assignments to revoke: {{ _offboard_team_assignments | length }} team / {{ _offboard_user_assignments | length }} user"
+          - "Authenticator maps to remove: {{ _offboard_auth_maps | map(attribute='name') | list }}"
+          - "Dedicated service account: {{ _offboard_svc_user.username | default('none') }}"
+          - "Dedicated gateway credential: {{ _offboard_gateway_cred.name | default('none') }}"
+          - "Shared resources are not deleted; only grants referencing this org are revoked."
+
+    # 3. Revoke grants, delete assets, and remove the organization last.
+    - name: Apply the offboarding plan
+      when: offboard_mode == 'delete'
+      block:
+        - name: Revoke inbound and outbound grants before deleting assets
+          ansible.builtin.include_tasks: _offboard_delete.yml
+          loop: "{{ _offboard_team_assignments + _offboard_user_assignments }}"
+          loop_control:
+            loop_var: _offboard_object
+            label: "{{ _offboard_object.url }}"
+
+        - name: Delete owned assets in dependency order
+          ansible.builtin.include_tasks: _offboard_delete.yml
+          loop: "{{ _offboard_owned | dict2items | map(attribute='value') | flatten }}"
+          loop_control:
+            loop_var: _offboard_object
+            label: "{{ _offboard_object.name }}"
+
+        - name: Remove authenticator maps, teams, and dedicated objects
+          ansible.builtin.include_tasks: _offboard_delete.yml
+          loop: >-
+            {{ _offboard_auth_maps + _offboard_teams
+               + ([_offboard_gateway_cred, _offboard_svc_user] | selectattr('url', 'defined') | list) }}
+          loop_control:
+            loop_var: _offboard_object
+            label: "{{ _offboard_object.url }}"
+
+        - name: Delete the organization last
+          ansible.builtin.include_tasks: _offboard_delete.yml
+          vars:
+            _offboard_object: "{{ _offboard_org_lookup.json.results[0] }}"
 ...
