@@ -28,16 +28,27 @@
         extensions: ['yml']
       when: not (_cred_injected | default(false) | bool)
 
-    - name: Validate offboarding request
+    - name: Require the team definition filename
+      ansible.builtin.assert:
+        that: target_team | default('') | trim | length > 0
+        fail_msg: "Provide target_team, for example target_team=team-alpha."
+
+    - name: Load the selected team definition
+      ansible.builtin.include_vars:
+        file: "../team_definitions/{{ target_team }}.yml"
+        name: _offboard_team
+
+    - name: Validate the team definition
       ansible.builtin.assert:
         that:
-          - org_display_name | default('') | trim | length > 0
-          - org_display_name != 'Default'
-        fail_msg: "Provide org_display_name. Default is protected."
+          - _offboard_team.team_name | default('') | trim | length > 0
+          - _offboard_team.org_display_name | default('') | trim | length > 0
+          - _offboard_team.org_display_name != 'Default'
+        fail_msg: "The team definition must provide team_name and org_display_name. Default is protected."
 
     - name: Look up the organization
       ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/gateway/v1/organizations/?name={{ org_display_name | urlencode }}"
+        url: "{{ aap_hostname }}/api/gateway/v1/organizations/?name={{ _offboard_team.org_display_name | urlencode }}"
         status_code: 200
       register: _offboard_org
 
@@ -50,34 +61,7 @@
     - name: Require exactly one organization
       ansible.builtin.assert:
         that: _offboard_org.json.count == 1
-        fail_msg: "Expected one organization named '{{ org_display_name }}'; found {{ _offboard_org.json.count }}."
-
-    # The onboarding definition identifies the global objects that org deletion leaves behind.
-    - name: Initialize onboarding lookup
-      ansible.builtin.set_fact:
-        _offboard_definitions: []
-        _offboard_fetched: {}
-
-    - name: Find the onboarding definition
-      ansible.builtin.set_fact:
-        _offboard_definitions: "{{ _offboard_definitions + [_definition] }}"
-      vars:
-        _definition: "{{ lookup('ansible.builtin.file', item) | from_yaml }}"
-      loop: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../team_definitions/*.yml') }}"
-      when: _definition.org_display_name | default('') == org_display_name
-      loop_control:
-        label: "{{ item | basename }}"
-
-    - name: Require one onboarding definition
-      ansible.builtin.assert:
-        that:
-          - _offboard_definitions | length == 1
-          - (_offboard_definitions | first | default({})).team_name | default('') | length > 0
-        fail_msg: "Keep exactly one matching onboarding definition until offboarding is complete."
-
-    - name: Set onboarding identity
-      ansible.builtin.set_fact:
-        _offboard_team: "{{ _offboard_definitions | first }}"
+        fail_msg: "Expected one organization named '{{ _offboard_team.org_display_name }}'; found {{ _offboard_org.json.count }}."
 
     - name: Check for role assignment files referencing the onboarding team
       ansible.builtin.find:
@@ -96,7 +80,7 @@
 
     - name: Look up the Controller organization
       ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/controller/v2/organizations/?name={{ org_display_name | urlencode }}"
+        url: "{{ aap_hostname }}/api/controller/v2/organizations/?name={{ _offboard_team.org_display_name | urlencode }}"
         status_code: 200
       register: _offboard_controller_org
 
@@ -160,7 +144,7 @@
 
     - name: Delete the organization and its remaining resources
       ansible.platform.organization:
-        name: "{{ org_display_name }}"
+        name: "{{ _offboard_team.org_display_name }}"
         state: absent
 
     - name: Wait for organization deletion in Gateway and Controller
