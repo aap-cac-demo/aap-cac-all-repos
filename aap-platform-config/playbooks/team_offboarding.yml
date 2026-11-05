@@ -1,112 +1,160 @@
 ---
-- name: Offboard a team from AAP
+- name: Offboard an organization from AAP
   hosts: all
   connection: local
-  vars_files:
-    - ../config/{{ env }}/secrets.yml
+  gather_facts: false
   vars:
-    team_name: ""
+    offboard_allow_missing_org: false
   module_defaults:
     group/ansible.platform.gateway:
       aap_hostname: "{{ aap_hostname }}"
       aap_username: "{{ aap_username }}"
       aap_password: "{{ aap_password }}"
       aap_validate_certs: "{{ aap_validate_certs }}"
+    ansible.controller.credential:
+      controller_host: "{{ aap_hostname }}"
+      controller_username: "{{ aap_username }}"
+      controller_password: "{{ aap_password }}"
+      validate_certs: "{{ aap_validate_certs }}"
+    ansible.builtin.uri:
+      user: "{{ aap_username }}"
+      password: "{{ aap_password }}"
+      force_basic_auth: true
+      validate_certs: "{{ aap_validate_certs }}"
   tasks:
     - name: Include env secrets
       ansible.builtin.include_vars:
         dir: "../config/{{ env }}"
-        extensions:
-          - 'yml'
+        extensions: ['yml']
+      when: not (_cred_injected | default(false) | bool)
 
-    - name: Validate team_name is provided
+    - name: Require the team definition filename
       ansible.builtin.assert:
-        that:
-          - team_name | length > 0
-        fail_msg: "team_name must be provided as extra var (e.g., -e team_name=team-bravo)"
+        that: target_team | default('') | trim | length > 0
+        fail_msg: "Provide target_team, for example target_team=team-alpha."
 
-    - name: "Load team definition: team_definitions/{{ team_name }}.yml"
+    - name: Load the selected team definition
       ansible.builtin.include_vars:
-        file: "../team_definitions/{{ team_name }}.yml"
+        file: "../team_definitions/{{ target_team }}.yml"
         name: _offboard_team
 
-    - name: Validate team definition fields
+    - name: Validate the team definition
       ansible.builtin.assert:
         that:
-          - _offboard_team.team_name is defined
-          - _offboard_team.org_display_name is defined
-        fail_msg: "Team definition missing required fields (team_name, org_display_name)"
+          - _offboard_team.team_name | default('') | trim | length > 0
+          - _offboard_team.org_display_name | default('') | trim | length > 0
+          - _offboard_team.org_display_name != 'Default'
+        fail_msg: "The team definition must provide team_name and org_display_name. Default is protected."
 
-    # --- Check for stale sharing definitions ---
+    - name: Look up the organization
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/gateway/v1/organizations/?name={{ _offboard_team.org_display_name | urlencode }}"
+        status_code: 200
+      register: _offboard_org
 
-    - name: "Check for sharing definitions referencing {{ _offboard_team.team_name }}"
+    - name: Stop when an already-absent organization is allowed
+      ansible.builtin.meta: end_play
+      when:
+        - _offboard_org.json.count == 0
+        - offboard_allow_missing_org | bool
+
+    - name: Require exactly one organization
+      ansible.builtin.assert:
+        that: _offboard_org.json.count == 1
+        fail_msg: "Expected one organization named '{{ _offboard_team.org_display_name }}'; found {{ _offboard_org.json.count }}."
+
+    - name: Check for role assignment files referencing the onboarding team
       ansible.builtin.find:
-        paths: "{{ playbook_dir }}/../sharing_definitions"
+        paths: "{{ playbook_dir }}/../role_assignments"
         patterns: "*{{ _offboard_team.team_name }}*"
         file_type: file
-      register: _stale_sharing_files
+      register: _offboard_role_files
 
-    - name: "WARNING: Stale sharing definitions found"
+    - name: Warn about stale role assignment files
       ansible.builtin.debug:
         msg: >-
-          The following sharing definitions reference the offboarded team and should be
-          removed via PR: {{ _stale_sharing_files.files | map(attribute='path') | map('basename') | list | join(', ') }}
-      when: _stale_sharing_files.matched > 0
+          The following role assignment files reference the offboarded team and
+          should be removed via PR:
+          {{ _offboard_role_files.files | map(attribute='path') | map('basename') | list | join(', ') }}
+      when: _offboard_role_files.matched > 0
 
-    # --- Remove custom sub-team authenticator maps (global, not cascade-deleted) ---
+    - name: Look up the Controller organization
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/controller/v2/organizations/?name={{ _offboard_team.org_display_name | urlencode }}"
+        status_code: 200
+      register: _offboard_controller_org
 
-    - name: "Remove custom sub-team authenticator maps"
-      ansible.platform.authenticator_map:
-        name: "{{ item.name }}-map"
-        authenticator: corporate-ldap
-        map_type: team
-        state: absent
-      loop: "{{ (_offboard_team.custom_teams | default([])) }}"
+    - name: Require one matching Controller organization
+      ansible.builtin.assert:
+        that: _offboard_controller_org.json.count == 1
+        fail_msg: "Controller organization is missing or ambiguous; no resources have been deleted."
+
+    # These survive org deletion. Their schedules and workflow nodes cascade with them.
+    - name: Discover Controller resources requiring explicit deletion
+      ansible.builtin.include_tasks: _offboard_fetch.yml
+      vars:
+        _fetch_label: "{{ item }}"
+        _fetch_key: "{{ item }}"
+        _fetch_url: >-
+          {{ aap_hostname }}/api/controller/v2/{{ item }}/?organization={{ _offboard_controller_org.json.results[0].id }}
+      loop: [workflow_job_templates, job_templates, projects]
+
+    - name: Collect Controller delete candidates
+      ansible.builtin.set_fact:
+        _offboard_resources: >-
+          {{ _offboard_fetched.workflow_job_templates
+             + _offboard_fetched.job_templates + _offboard_fetched.projects }}
+
+    - name: Verify Controller resource ownership
+      ansible.builtin.assert:
+        that: item.summary_fields.organization.id | int == _offboard_controller_org.json.results[0].id | int
+        fail_msg: "Ownership check failed for {{ item.name }}."
+      loop: "{{ _offboard_resources }}"
       loop_control:
-        label: "{{ item.name }}-map"
+        label: "{{ item.name }}"
 
-    # --- Remove authenticator maps (global, not cascade-deleted) ---
+    - name: Delete workflows, job templates, then projects
+      ansible.builtin.include_tasks: _offboard_delete.yml
+      loop: "{{ _offboard_resources }}"
+      loop_control:
+        loop_var: _offboard_object
+        label: "{{ _offboard_object.name }}"
 
-    - name: "Remove authenticator map for admins (org admin)"
+    - name: Remove onboarding authenticator maps
       ansible.platform.authenticator_map:
-        name: "{{ _offboard_team.team_name }}-admins-map"
+        name: "{{ item }}-map"
         authenticator: corporate-ldap
-        map_type: organization
         state: absent
+      loop: >-
+        {{ [_offboard_team.team_name ~ '-admins', _offboard_team.team_name ~ '-operators']
+           + (_offboard_team.custom_teams | default([])
+              | selectattr('ldap_group', 'defined') | map(attribute='name') | list) }}
 
-    - name: "Remove LDAP authenticator map for operators"
-      ansible.platform.authenticator_map:
-        name: "{{ _offboard_team.team_name }}-operators-map"
-        authenticator: corporate-ldap
-        map_type: team
-        state: absent
-
-    # --- Remove credentials in Platform org (not cascade-deleted with team org) ---
-
-    - name: "Remove gateway credential: {{ _offboard_team.team_name }}-gateway-cred"
+    - name: Remove the dedicated Platform gateway credential
       ansible.controller.credential:
         name: "{{ _offboard_team.team_name }}-gateway-cred"
         organization: Platform
-        credential_type: "AAP CaC Credential"
+        credential_type: AAP CaC Credential
         state: absent
-        controller_host: "{{ aap_hostname }}"
-        controller_username: "{{ aap_username }}"
-        controller_password: "{{ aap_password }}"
-        validate_certs: "{{ aap_validate_certs }}"
 
-    # Vault credential (in team org) is cascade-deleted with the organization.
-
-    # --- Remove service account (global, not cascade-deleted) ---
-
-    - name: "Remove CaC service account: svc-{{ _offboard_team.team_name }}-cac"
+    - name: Remove the dedicated CaC service account
       ansible.platform.user:
         username: "svc-{{ _offboard_team.team_name }}-cac"
         state: absent
 
-    # --- Remove organization (cascades: teams, projects, JTs, inventories) ---
-
-    - name: "Remove organization: {{ _offboard_team.org_display_name }}"
+    - name: Delete the organization and its remaining resources
       ansible.platform.organization:
         name: "{{ _offboard_team.org_display_name }}"
         state: absent
-...
+
+    - name: Wait for organization deletion in Gateway and Controller
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}{{ item }}"
+        status_code: [200, 202, 404]
+      register: _offboard_removed
+      until: _offboard_removed.status == 404
+      retries: 30
+      delay: 2
+      loop:
+        - "{{ _offboard_org.json.results[0].url }}"
+        - "{{ _offboard_controller_org.json.results[0].url }}"
