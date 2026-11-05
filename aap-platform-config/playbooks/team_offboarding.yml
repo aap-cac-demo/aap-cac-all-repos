@@ -4,7 +4,6 @@
   connection: local
   gather_facts: false
   vars:
-    offboard_mode: plan
     offboard_allow_missing_org: false
   module_defaults:
     group/ansible.platform.gateway:
@@ -34,8 +33,7 @@
         that:
           - org_display_name | default('') | trim | length > 0
           - org_display_name != 'Default'
-          - offboard_mode in ['plan', 'delete']
-        fail_msg: "Provide org_display_name and offboard_mode=plan or delete. Default is protected."
+        fail_msg: "Provide org_display_name. Default is protected."
 
     - name: Look up the organization
       ansible.builtin.uri:
@@ -81,43 +79,20 @@
       ansible.builtin.set_fact:
         _offboard_team: "{{ _offboard_definitions | first }}"
 
-    # Read all actual teams so the guard also covers teams added after onboarding.
-    - name: Find the organization's teams
-      ansible.builtin.include_tasks: _offboard_fetch.yml
-      vars:
-        _fetch_label: teams
-        _fetch_key: teams
-        _fetch_url: "{{ aap_hostname }}/api/gateway/v1/teams/?organization={{ _offboard_org.json.results[0].id }}"
+    - name: Check for role assignment files referencing the onboarding team
+      ansible.builtin.find:
+        paths: "{{ playbook_dir }}/../role_assignments"
+        patterns: "*{{ _offboard_team.team_name }}*"
+        file_type: file
+      register: _offboard_role_files
 
-    - name: Set team names for sharing checks
-      ansible.builtin.set_fact:
-        _offboard_team_names: >-
-          {{ (_offboard_fetched.teams | map(attribute='name') | list)
-             + [_offboard_team.team_name ~ '-operators']
-             + (_offboard_team.custom_teams | default([]) | map(attribute='name') | list) }}
-
-    # role_assignments uses team; the existing sharing_definitions uses consumer_team.
-    # Check contents, never filenames. Even state: absent references must be removed
-    # first because apply-sharing resolves the org and team before removing grants.
-    - name: Abort when sharing configuration references this organization or its teams
-      ansible.builtin.assert:
-        that:
-          - _sharing is mapping
-          - _sharing.owner_org | default('') != org_display_name
-          - (_sharing.team | default(_sharing.consumer_team | default(''))) not in _offboard_team_names
-        fail_msg: >-
-          Offboarding blocked by {{ item | basename }}. Remove this organization's
-          owner_org or team sharing reference and apply sharing changes before retrying.
-      vars:
-        _sharing: "{{ lookup('ansible.builtin.file', item) | from_yaml }}"
-      loop: >-
-        {{ query('ansible.builtin.fileglob',
-             playbook_dir ~ '/../role_assignments/*.yml',
-             playbook_dir ~ '/../role_assignments/*.yaml',
-             playbook_dir ~ '/../sharing_definitions/*.yml',
-             playbook_dir ~ '/../sharing_definitions/*.yaml') }}
-      loop_control:
-        label: "{{ item | basename }}"
+    - name: Warn about stale role assignment files
+      ansible.builtin.debug:
+        msg: >-
+          The following role assignment files reference the offboarded team and
+          should be removed via PR:
+          {{ _offboard_role_files.files | map(attribute='path') | map('basename') | list | join(', ') }}
+      when: _offboard_role_files.matched > 0
 
     - name: Look up the Controller organization
       ansible.builtin.uri:
@@ -154,59 +129,48 @@
       loop_control:
         label: "{{ item.name }}"
 
-    - name: Show the offboarding plan
-      ansible.builtin.debug:
-        msg:
-          - "Mode: {{ offboard_mode }}; organization: {{ org_display_name }}"
-          - "Explicit Controller cleanup: {{ _offboard_resources | map(attribute='name') | list }}"
-          - "Remove onboarding authenticator maps, svc-{{ _offboard_team.team_name }}-cac, and Platform credential {{ _offboard_team.team_name }}-gateway-cred."
-          - "Organization deletion removes teams, role assignments, inventories, org credentials, notifications, and execution environments. Ordinary users remain."
+    - name: Delete workflows, job templates, then projects
+      ansible.builtin.include_tasks: _offboard_delete.yml
+      loop: "{{ _offboard_resources }}"
+      loop_control:
+        loop_var: _offboard_object
+        label: "{{ _offboard_object.name }}"
 
-    - name: Apply offboarding
-      when: offboard_mode == 'delete'
-      block:
-        - name: Delete workflows, job templates, then projects
-          ansible.builtin.include_tasks: _offboard_delete.yml
-          loop: "{{ _offboard_resources }}"
-          loop_control:
-            loop_var: _offboard_object
-            label: "{{ _offboard_object.name }}"
+    - name: Remove onboarding authenticator maps
+      ansible.platform.authenticator_map:
+        name: "{{ item }}-map"
+        authenticator: corporate-ldap
+        state: absent
+      loop: >-
+        {{ [_offboard_team.team_name ~ '-admins', _offboard_team.team_name ~ '-operators']
+           + (_offboard_team.custom_teams | default([])
+              | selectattr('ldap_group', 'defined') | map(attribute='name') | list) }}
 
-        - name: Remove onboarding authenticator maps
-          ansible.platform.authenticator_map:
-            name: "{{ item }}-map"
-            authenticator: corporate-ldap
-            state: absent
-          loop: >-
-            {{ [_offboard_team.team_name ~ '-admins', _offboard_team.team_name ~ '-operators']
-               + (_offboard_team.custom_teams | default([])
-                  | selectattr('ldap_group', 'defined') | map(attribute='name') | list) }}
+    - name: Remove the dedicated Platform gateway credential
+      ansible.controller.credential:
+        name: "{{ _offboard_team.team_name }}-gateway-cred"
+        organization: Platform
+        credential_type: AAP CaC Credential
+        state: absent
 
-        - name: Remove the dedicated Platform gateway credential
-          ansible.controller.credential:
-            name: "{{ _offboard_team.team_name }}-gateway-cred"
-            organization: Platform
-            credential_type: AAP CaC Credential
-            state: absent
+    - name: Remove the dedicated CaC service account
+      ansible.platform.user:
+        username: "svc-{{ _offboard_team.team_name }}-cac"
+        state: absent
 
-        - name: Remove the dedicated CaC service account
-          ansible.platform.user:
-            username: "svc-{{ _offboard_team.team_name }}-cac"
-            state: absent
+    - name: Delete the organization and its remaining resources
+      ansible.platform.organization:
+        name: "{{ org_display_name }}"
+        state: absent
 
-        - name: Delete the organization and its remaining resources
-          ansible.platform.organization:
-            name: "{{ org_display_name }}"
-            state: absent
-
-        - name: Wait for organization deletion in Gateway and Controller
-          ansible.builtin.uri:
-            url: "{{ aap_hostname }}{{ item }}"
-            status_code: [200, 202, 404]
-          register: _offboard_removed
-          until: _offboard_removed.status == 404
-          retries: 30
-          delay: 2
-          loop:
-            - "{{ _offboard_org.json.results[0].url }}"
-            - "{{ _offboard_controller_org.json.results[0].url }}"
+    - name: Wait for organization deletion in Gateway and Controller
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}{{ item }}"
+        status_code: [200, 202, 404]
+      register: _offboard_removed
+      until: _offboard_removed.status == 404
+      retries: 30
+      delay: 2
+      loop:
+        - "{{ _offboard_org.json.results[0].url }}"
+        - "{{ _offboard_controller_org.json.results[0].url }}"

@@ -1,7 +1,6 @@
 ---
 # Delete one discovered object by its exact URL, then wait for removal.
 # Checking the detail URL avoids content-type collisions between numeric IDs.
-# Called only from the main playbook's delete-mode block.
 - name: "Delete object: {{ _offboard_object.url }}"
   ansible.builtin.uri:
     url: "{{ aap_hostname }}{{ _offboard_object.url }}"
